@@ -1,24 +1,14 @@
 #!/bin/bash
 set -e
 
-echo "=== TrueNAS Scale App Manifest Generator & Installer ==="
+echo "=== TrueNAS Scale Bare Install App Setup ==="
 
 # Hardcoded pools
 POOL_APPS="APPS"
 POOL_MEDIA="STORAGE"
 
-# Prompt for GPU type
-echo "Select GPU type (if you have an NVIDIA GPU):"
-select GPU_TYPE in "None" "Intel" "NVIDIA"; do
-    case $GPU_TYPE in
-        None|Intel|NVIDIA) break;;
-        *) echo "Invalid selection";;
-    esac
-done
-
-if [[ "$GPU_TYPE" == "NVIDIA" ]]; then
-    read -p "Enter NVIDIA GPU model (e.g., RTX 3060, A2000): " NVIDIA_MODEL
-fi
+# GPU default to None for bare install
+GPU_TYPE="None"
 
 # Ensure apps user/group
 if ! id apps &>/dev/null; then
@@ -106,9 +96,6 @@ EOF
     fi
 
     echo "Manifest generated: $YAML_FILE"
-    echo "==== $appname manifest ===="
-    cat "$YAML_FILE"
-    echo "==== End $appname ===="
     echo
 }
 
@@ -128,14 +115,14 @@ for app in "${APPS[@]}"; do
             IMAGE="linuxserver/sonarr:latest"
             PORTS=("8989:8989")
             VOLUMES=("/mnt/$POOL_APPS/sonarr:/config" "/mnt/$POOL_MEDIA:/media")
-            ENVS=("PUID=568" "PGID=568" "TZ=Europe/Amsterdam" "SONARR_ROOTFOLDER=/media/tv")
+            ENVS=("PUID=568" "PGID=568" "TZ=Europe/Amsterdam")
             GPU_OPT="None"
             ;;
         radarr)
             IMAGE="linuxserver/radarr:latest"
             PORTS=("7878:7878")
             VOLUMES=("/mnt/$POOL_APPS/radarr:/config" "/mnt/$POOL_MEDIA:/media")
-            ENVS=("PUID=568" "PGID=568" "TZ=Europe/Amsterdam" "RADARR_ROOTFOLDER=/media/movies")
+            ENVS=("PUID=568" "PGID=568" "TZ=Europe/Amsterdam")
             GPU_OPT="None"
             ;;
         tdarr)
@@ -183,8 +170,8 @@ for app in "${APPS[@]}"; do
     generate_app_manifest "$app" "$IMAGE" PORTS[@] VOLUMES[@] ENVS[@] "$GPU_OPT"
 done
 
+# Apply manifests
 echo "=== Applying manifests to TrueNAS Scale Apps ==="
-
 for app in "${APPS[@]}"; do
     YAML_FILE="$BASE_APPS_DIR/$app/$app.yaml"
     if [[ -f "$YAML_FILE" ]]; then
@@ -194,7 +181,6 @@ for app in "${APPS[@]}"; do
 done
 
 echo "=== Waiting for pods to be ready ==="
-
 for app in "${APPS[@]}"; do
     POD=""
     echo "Waiting for $app pod..."
@@ -206,13 +192,12 @@ for app in "${APPS[@]}"; do
 done
 
 echo "=== All pods are ready! ==="
-echo "Accessible URLs:"
-
 HOST_IP=$(hostname -I | awk '{print $1}')
 declare -A PORT_MAP=( ["jellyfin"]=8096 ["sonarr"]=8989 ["radarr"]=7878 ["tdarr"]=8265 ["prowlarr"]=9696 ["qbittorrent"]=10080 )
 
+echo "Accessible URLs:"
 for app in "${!PORT_MAP[@]}"; do
     echo "$app: http://$HOST_IP:${PORT_MAP[$app]}"
 done
 
-echo "=== All TrueNAS Scale apps installed and ready! ==="
+echo "=== TrueNAS Scale bare install completed! ==="
