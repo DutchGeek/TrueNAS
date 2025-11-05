@@ -1,149 +1,195 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-echo "=== TrueNAS Scale Bare Install App Setup ==="
+# TrueNAS Scale manifest generator (native app manifests)
+# - Hardcoded pools: /mnt/APPS and /mnt/STORAGE
+# - Creates directories and generates Chart.yaml + values.yaml per app
+# - Does NOT call kubectl (safe for Web UI Shell)
+# - Uses apps UID/GID 568:568
+# - qBittorrent is preconfigured as requested
 
-# Hardcoded pools
-POOL_APPS="APPS"
-POOL_MEDIA="STORAGE"
+APPS_POOL="APPS"
+STORAGE_POOL="STORAGE"
 
-# GPU default to None for bare install
-GPU_TYPE="None"
+BASE_APPS_DIR="/mnt/${APPS_POOL}"
+BASE_MEDIA_DIR="/mnt/${STORAGE_POOL}"
 
-# Ensure apps user/group
-if ! id apps &>/dev/null; then
-    echo "Creating apps group and user..."
-    groupadd apps
-    useradd -m -g apps apps
+PUID="568"
+PGID="568"
+TZ="Europe/Amsterdam"
+
+APPLIST=(jellyfin sonarr radarr tdarr prowlarr qbittorrent)
+
+echo "=== TrueNAS SCALE manifest generator ==="
+echo "APPS pool: $APPS_POOL -> $BASE_APPS_DIR"
+echo "STORAGE pool: $STORAGE_POOL -> $BASE_MEDIA_DIR"
+echo
+
+# Ask about NVIDIA GPU support (optional)
+GPU_TYPE="none"
+read -p "Do you want to add NVIDIA GPU reservations to Jellyfin/Tdarr manifests? (yes/no) [no]: " gpu_reply
+gpu_reply="${gpu_reply:-no}"
+if [[ "${gpu_reply,,}" =~ ^(y|yes)$ ]]; then
+  GPU_TYPE="nvidia"
+  read -p "Enter NVIDIA GPU model identifier for values.yaml (example: 'all' or 'RTX3060'): " NVIDIA_MODEL
+  NVIDIA_MODEL="${NVIDIA_MODEL:-all}"
 fi
 
-# Base directories
-BASE_APPS_DIR="/mnt/$POOL_APPS"
-BASE_MEDIA_DIR="/mnt/$POOL_MEDIA"
-
-# Create directories
+# Ensure base mount points exist
 mkdir -p "$BASE_APPS_DIR"
 mkdir -p "$BASE_MEDIA_DIR"
 
+# Create media subdirs
 MEDIA_SUBDIRS=("movies" "tv" "downloads" "Incomplete" "Completed" "Completed Torrents")
-for sub in "${MEDIA_SUBDIRS[@]}"; do
-    DIR="$BASE_MEDIA_DIR/$sub"
-    mkdir -p "$DIR"
-    chown apps:apps "$DIR"
-    chmod 770 "$DIR"
+for d in "${MEDIA_SUBDIRS[@]}"; do
+  mp="$BASE_MEDIA_DIR/$d"
+  if [ ! -d "$mp" ]; then
+    mkdir -p "$mp"
+    chown "${PUID}:${PGID}" "$mp" || chown apps:apps "$mp" 2>/dev/null || true
+    chmod 770 "$mp"
+    echo "Created media dir: $mp"
+  fi
 done
 
-# Tdarr subdirs
+# Create tdarr subdirs under APPS pool (configs live directly under APPS)
 TDARR_SUBDIRS=("server" "logs" "transcode_cache")
-for sub in "${TDARR_SUBDIRS[@]}"; do
-    DIR="$BASE_APPS_DIR/tdarr/$sub"
-    mkdir -p "$DIR"
-    chown apps:apps "$DIR"
-    chmod 770 "$DIR"
+for d in "${TDARR_SUBDIRS[@]}"; do
+  mp="$BASE_APPS_DIR/tdarr/$d"
+  if [ ! -d "$mp" ]; then
+    mkdir -p "$mp"
+    chown "${PUID}:${PGID}" "$mp" || chown apps:apps "$mp" 2>/dev/null || true
+    chmod 770 "$mp"
+    echo "Created tdarr config dir: $mp"
+  fi
 done
 
-# Function to generate TrueNAS Scale App manifest
-generate_app_manifest() {
-    local appname="$1"
-    local image="$2"
-    local ports=("${!3}")
-    local volumes=("${!4}")
-    local envs=("${!5}")
-    local gpu="$6"
-
-    local APP_DIR="$BASE_APPS_DIR/$appname"
-    mkdir -p "$APP_DIR"
-
-    local YAML_FILE="$APP_DIR/$appname.yaml"
-
-    echo "Generating manifest for $appname..."
-
-    cat > "$YAML_FILE" <<EOF
-apiVersion: apps.truenas.com/v1alpha1
-kind: TrueNASApp
-metadata:
-  name: $appname
-spec:
-  image: $image
-  restartPolicy: Always
-  environment:
+# Helper: write Chart.yaml
+write_chart_yaml() {
+  local app="$1"
+  local chart_file="$2"
+  cat > "$chart_file" <<EOF
+apiVersion: v2
+name: ${app}
+description: "${app} - generated TrueNAS SCALE app package (auto)"
+type: application
+version: 0.1.0
+appVersion: "1.0"
 EOF
-
-    for e in "${envs[@]}"; do
-        echo "    - name: ${e%=*}" >> "$YAML_FILE"
-        echo "      value: \"${e#*=}\"" >> "$YAML_FILE"
-    done
-
-    echo "  ports:" >> "$YAML_FILE"
-    for p in "${ports[@]}"; do
-        echo "    - containerPort: ${p%:*}" >> "$YAML_FILE"
-        echo "      hostPort: ${p#*:}" >> "$YAML_FILE"
-    done
-
-    echo "  volumes:" >> "$YAML_FILE"
-    for v in "${volumes[@]}"; do
-        echo "    - containerPath: ${v%%:*}" >> "$YAML_FILE"
-        echo "      hostPath: ${v#*:}" >> "$YAML_FILE"
-    done
-
-    if [[ "$gpu" == "nvidia" ]]; then
-        echo "  resources:" >> "$YAML_FILE"
-        echo "    reservations:" >> "$YAML_FILE"
-        echo "      devices:" >> "$YAML_FILE"
-        echo "        - driver: nvidia" >> "$YAML_FILE"
-        echo "          count: all" >> "$YAML_FILE"
-        echo "          capabilities: [gpu]" >> "$YAML_FILE"
-    fi
-
-    echo "Manifest generated: $YAML_FILE"
-    echo
 }
 
-# App definitions
-APPS=("jellyfin" "sonarr" "radarr" "tdarr" "prowlarr" "qbittorrent")
+# Helper: write values.yaml (simple container spec that TrueNAS UI accepts)
+# We craft values that map to a container image, ports, volumes and env.
+write_values_yaml() {
+  local app="$1"
+  local values_file="$2"
+  local image="$3"
+  local ports_yaml="$4"       # preformatted YAML block (indented)
+  local volumes_yaml="$5"     # preformatted YAML block (indented)
+  local env_yaml="$6"         # preformatted YAML block (indented)
+  local gpu_block="$7"        # optional GPU block (indented)
 
-for app in "${APPS[@]}"; do
-    case $app in
-        jellyfin)
-            IMAGE="lscr.io/linuxserver/jellyfin:latest"
-            PORTS=("8096:8096")
-            VOLUMES=("/mnt/$POOL_APPS/jellyfin:/config" "/mnt/$POOL_MEDIA:/media")
-            ENVS=("PUID=568" "PGID=568" "TZ=Europe/Amsterdam")
-            GPU_OPT="$GPU_TYPE"
-            ;;
-        sonarr)
-            IMAGE="linuxserver/sonarr:latest"
-            PORTS=("8989:8989")
-            VOLUMES=("/mnt/$POOL_APPS/sonarr:/config" "/mnt/$POOL_MEDIA:/media")
-            ENVS=("PUID=568" "PGID=568" "TZ=Europe/Amsterdam")
-            GPU_OPT="None"
-            ;;
-        radarr)
-            IMAGE="linuxserver/radarr:latest"
-            PORTS=("7878:7878")
-            VOLUMES=("/mnt/$POOL_APPS/radarr:/config" "/mnt/$POOL_MEDIA:/media")
-            ENVS=("PUID=568" "PGID=568" "TZ=Europe/Amsterdam")
-            GPU_OPT="None"
-            ;;
-        tdarr)
-            IMAGE="haveagitgat/tdarr:latest"
-            PORTS=("8265:8265" "8266:8266")
-            VOLUMES=("/mnt/$POOL_APPS/tdarr:/app/config" "/mnt/$POOL_MEDIA:/media")
-            ENVS=("PUID=568" "PGID=568" "TZ=Europe/Amsterdam" "TDARR_CACHE=/app/config/transcode_cache")
-            GPU_OPT="$GPU_TYPE"
-            ;;
-        prowlarr)
-            IMAGE="linuxserver/prowlarr:latest"
-            PORTS=("9696:9696")
-            VOLUMES=("/mnt/$POOL_APPS/prowlarr:/config" "/mnt/$POOL_MEDIA:/media")
-            ENVS=("PUID=568" "PGID=568" "TZ=Europe/Amsterdam")
-            GPU_OPT="None"
-            ;;
-        qbittorrent)
-            IMAGE="ghcr.io/hotio/qbittorrent"
-            PORTS=("10080:10080")
-            VOLUMES=("/mnt/$POOL_APPS/qbittorrent:/config" "/mnt/$POOL_MEDIA:/media")
-            ENVS=("PUID=568" "PGID=568" "UMASK=002" "TZ=Europe/Amsterdam" \
+  cat > "$values_file" <<EOF
+replicaCount: 1
+image:
+  repository: ${image}
+  pullPolicy: IfNotPresent
+service:
+${ports_yaml}
+persistence:
+${volumes_yaml}
+env:
+${env_yaml}
+${gpu_block}
+EOF
+}
+
+# Helper: format ports for values.yaml
+format_ports_block() {
+  local -n ports_ref=$1
+  local out="  ports:"
+  for p in "${ports_ref[@]}"; do
+    # p expected in format "host:container" or "port:port"
+    host_port="${p%%:*}"
+    container_port="${p##*:}"
+    out+="\n    - name: port-${container_port}\n      port: ${container_port}\n      targetPort: ${container_port}\n      nodePort: ${host_port}"
+  done
+  echo -e "$out"
+}
+
+# Helper: format volumes for values.yaml
+format_volumes_block() {
+  local -n vols_ref=$1
+  local out="  enabled: true\n  mounts:"
+  for v in "${vols_ref[@]}"; do
+    # v format: "/host/path:/container/path"
+    host="${v%%:*}"
+    container="${v#*:}"
+    out+="\n    - name: $(basename "$container")\n      mountPath: ${container}\n      hostPath: ${host}"
+  done
+  echo -e "$out"
+}
+
+# Helper: format env block
+format_env_block() {
+  local -n env_ref=$1
+  local out="  - name: DUMMY\n    value: \"\"\n"
+  # We'll convert to a simple mapping expected by TrueNAS values.yaml env section:
+  # produce entries like:   - name: PUID\n      value: "568"
+  out=""
+  for e in "${env_ref[@]}"; do
+    key="${e%%=*}"
+    val="${e#*=}"
+    out+="  - name: ${key}\n    value: \"${val}\"\n"
+  done
+  echo -e "$out"
+}
+
+# Create per-app folders and files
+for app in "${APPLIST[@]}"; do
+  APP_DIR="$BASE_APPS_DIR/$app"
+  mkdir -p "$APP_DIR"
+  chown "${PUID}:${PGID}" "$APP_DIR" || chown apps:apps "$APP_DIR" 2>/dev/null || true
+  chmod 770 "$APP_DIR"
+
+  CHART_FILE="$APP_DIR/Chart.yaml"
+  VALUES_FILE="$APP_DIR/values.yaml"
+
+  case "$app" in
+    jellyfin)
+      IMAGE="lscr.io/linuxserver/jellyfin:latest"
+      PORTS=("8096:8096")
+      VOLS=("/mnt/${APPS_POOL}/jellyfin:/config" "/mnt/${STORAGE_POOL}:/media")
+      ENVS=("PUID=${PUID}" "PGID=${PGID}" "TZ=${TZ}")
+      ;;
+    sonarr)
+      IMAGE="linuxserver/sonarr:latest"
+      PORTS=("8989:8989")
+      VOLS=("/mnt/${APPS_POOL}/sonarr:/config" "/mnt/${STORAGE_POOL}:/media")
+      ENVS=("PUID=${PUID}" "PGID=${PGID}" "TZ=${TZ}" "SONARR_ROOTFOLDER=/media/tv")
+      ;;
+    radarr)
+      IMAGE="linuxserver/radarr:latest"
+      PORTS=("7878:7878")
+      VOLS=("/mnt/${APPS_POOL}/radarr:/config" "/mnt/${STORAGE_POOL}:/media")
+      ENVS=("PUID=${PUID}" "PGID=${PGID}" "TZ=${TZ}" "RADARR_ROOTFOLDER=/media/movies")
+      ;;
+    tdarr)
+      IMAGE="haveagitgat/tdarr:latest"
+      PORTS=("8265:8265" "8266:8266")
+      VOLS=("/mnt/${APPS_POOL}/tdarr:/app/config" "/mnt/${STORAGE_POOL}:/media")
+      ENVS=("PUID=${PUID}" "PGID=${PGID}" "TZ=${TZ}" "TDARR_CACHE=/app/config/transcode_cache")
+      ;;
+    prowlarr)
+      IMAGE="linuxserver/prowlarr:latest"
+      PORTS=("9696:9696")
+      VOLS=("/mnt/${APPS_POOL}/prowlarr:/config" "/mnt/${STORAGE_POOL}:/media")
+      ENVS=("PUID=${PUID}" "PGID=${PGID}" "TZ=${TZ}")
+      ;;
+    qbittorrent)
+      IMAGE="ghcr.io/hotio/qbittorrent"
+      PORTS=("10080:10080")
+      VOLS=("/mnt/${APPS_POOL}/qbittorrent:/config" "/mnt/${STORAGE_POOL}:/media")
+      ENVS=("PUID=${PUID}" "PGID=${PGID}" "UMASK=002" "TZ=${TZ}" \
 "INCOMPLETE_PATH=/media/Incomplete" \
 "COMPLETED_PATH=/media/Completed" \
 "COMPLETED_TORRENTS_PATH=/media/Completed Torrents" \
@@ -164,40 +210,65 @@ for app in "${APPS[@]}"; do
 "RSS_AUTO_DOWNLOAD=true" \
 "TORRENT_MODE=automatic" \
 "DEFAULT_SAVE_PATH=/media/Completed")
-            GPU_OPT="None"
-            ;;
-    esac
-    generate_app_manifest "$app" "$IMAGE" PORTS[@] VOLUMES[@] ENVS[@] "$GPU_OPT"
+      ;;
+    *)
+      echo "Unknown app: $app - skipping"
+      continue
+      ;;
+  esac
+
+  # Write Chart.yaml & values.yaml
+  write_chart_yaml "$app" "$CHART_FILE"
+
+  # Prepare YAML blocks for values.yaml
+  ports_block="$(format_ports_block ports_array)"
+  # Because format_ports_block expects a named array ref, create it dynamically:
+  eval "ports_array=(\"\${PORTS[@]}\")"
+  ports_block="$(format_ports_block ports_array)"
+
+  eval "vols_array=(\"\${VOLS[@]}\")"
+  volumes_block="$(format_volumes_block vols_array)"
+
+  eval "env_array=(\"\${ENVS[@]}\")"
+  env_block="$(format_env_block env_array)"
+
+  gpu_block=""
+  if [[ "$app" =~ ^(jellyfin|tdarr)$ ]] && [[ "$GPU_TYPE" == "nvidia" ]]; then
+    gpu_block="resources:\n  reservations:\n    devices:\n      - driver: nvidia\n        count: all\n        capabilities: [gpu]\nnvidia:\n  visible_devices: \"${NVIDIA_MODEL}\""
+  fi
+
+  # Write values.yaml
+  write_values_yaml "$app" "$VALUES_FILE" "$IMAGE" "$ports_block" "$volumes_block" "$env_block" "$gpu_block"
+
+  # Fix permissions
+  chown "${PUID}:${PGID}" "$CHART_FILE" "$VALUES_FILE" || chown apps:apps "$CHART_FILE" "$VALUES_FILE" 2>/dev/null || true
+  chmod 660 "$CHART_FILE" "$VALUES_FILE"
+
+  echo "Generated manifest package for $app in $APP_DIR"
 done
 
-# Apply manifests
-echo "=== Applying manifests to TrueNAS Scale Apps ==="
-for app in "${APPS[@]}"; do
-    YAML_FILE="$BASE_APPS_DIR/$app/$app.yaml"
-    if [[ -f "$YAML_FILE" ]]; then
-        echo "Applying $app manifest..."
-        kubectl apply -f "$YAML_FILE" --namespace apps
-    fi
+echo
+echo "=== Generation complete ==="
+echo "You will find app packages at:"
+for app in "${APPLIST[@]}"; do
+  echo " - $BASE_APPS_DIR/$app"
 done
 
-echo "=== Waiting for pods to be ready ==="
-for app in "${APPS[@]}"; do
-    POD=""
-    echo "Waiting for $app pod..."
-    while [ -z "$POD" ]; do
-        POD=$(kubectl get pods -n apps -l "app=$app" -o jsonpath="{.items[0].metadata.name}" 2>/dev/null || true)
-        sleep 2
-    done
-    kubectl wait --for=condition=Ready pod "$POD" -n apps --timeout=300s
-done
+cat <<'EOF'
 
-echo "=== All pods are ready! ==="
-HOST_IP=$(hostname -I | awk '{print $1}')
-declare -A PORT_MAP=( ["jellyfin"]=8096 ["sonarr"]=8989 ["radarr"]=7878 ["tdarr"]=8265 ["prowlarr"]=9696 ["qbittorrent"]=10080 )
+How to install these packages in the TrueNAS SCALE UI (no kubectl required):
 
-echo "Accessible URLs:"
-for app in "${!PORT_MAP[@]}"; do
-    echo "$app: http://$HOST_IP:${PORT_MAP[$app]}"
-done
+1) Open TrueNAS SCALE web UI -> Apps -> Manage Apps (or Discover -> Install via YAML)
+2) For each app folder (e.g. /mnt/APPS/jellyfin) open the values.yaml file and copy its contents.
+   Use "Install via YAML" (or Upload YAML) and paste the generated values.yaml / Chart.yaml as needed.
+   If the UI asks for a full app manifest, paste the values.yaml combined with Chart.yaml metadata.
+   (Alternatively, drag & drop these files in the Apps "Upload YAML" dialog if your SCALE version supports it.)
+3) After install, the app will appear in Apps list. Configure any app-specific UI options when needed.
 
-echo "=== TrueNAS Scale bare install completed! ==="
+Notes:
+ - This script intentionally does NOT call kubectl; it only creates the native package files.
+ - Files are owned by UID:GID ${PUID}:${PGID} and have restrictive permissions (770/660).
+ - Media folders created: ${MEDIA_SUBDIRS[*]} under $BASE_MEDIA_DIR
+ - Tdarr subfolders: ${TDARR_SUBDIRS[*]} under $BASE_APPS_DIR/tdarr
+
+EOF
