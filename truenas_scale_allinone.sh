@@ -1,234 +1,143 @@
 #!/bin/bash
 
-# Permanent pool names
+# Permanent pools
 CONFIG_POOL="APPS"
 MEDIA_POOL="STORAGE"
 
-# Retrieve private IP for CIDR (if needed)
+# Retrieve the private IP address of the server and convert it to CIDR notation
 PRIVATE_IP=$(hostname -I | awk '{print $1}')
 CIDR_NETWORK="${PRIVATE_IP%.*}.0/24"
 
-# Define datasets and directories
-CONFIG_DATASETS=("prowlarr" "radarr" "sonarr" "jellyseerr" "profilarr" "bazarr" "jellyfin" "qbittorrent" "dozzle" "watchtower")
-MEDIA_SUBDIRECTORIES=("movies" "tv" "downloads" "incomplete" "Completed" "Completed_Torrents")
+# Define datasets and directories (all lowercase except pool names)
+CONFIG_DATASETS=("prowlarr" "radarr" "sonarr" "jellyseerr" "profilarr" "bazarr" "jellyfin" "qbittorrent" "dozzle")
+MEDIA_SUBDIRECTORIES=("movies" "tv" "downloads" "incomplete" "completed" "completed_torrents")
 DOCKER_COMPOSE_PATH="/mnt/$CONFIG_POOL/docker"
-YAML_OUTPUT_DIR="$DOCKER_COMPOSE_PATH/yamls"
+YAML_PATH="$DOCKER_COMPOSE_PATH/yamls"
+QBITTORRENT_CONFIG_DIR="/mnt/$CONFIG_POOL/configs/qbittorrent"
+
+# Prompt for NVIDIA GPU usage
+read -p "Do you have an NVIDIA GPU you want to pass through to containers? (yes/no): " USE_NVIDIA
+USE_NVIDIA=$(echo "$USE_NVIDIA" | tr '[:upper:]' '[:lower:]')
 
 # Function to create dataset
 create_dataset() {
-    local pool="$1"
-    local dataset="$2"
-    local path="/mnt/$pool/$dataset"
-    if [ ! -d "$path" ]; then
-        echo "Creating dataset/directory: $path"
-        mkdir -p "$path"
-        chown root:apps "$path"
-        chmod 770 "$path"
+    local pool_name="$1"
+    local dataset_name="$2"
+    local dataset_path="$pool_name/$(echo "$dataset_name" | tr '[:upper:]' '[:lower:]')"
+    local mountpoint="/mnt/$dataset_path"
+
+    if ! zfs list "$dataset_path" >/dev/null 2>&1; then
+        echo "Creating dataset: $dataset_path"
+        zfs create "$dataset_path"
+    fi
+
+    # Ensure mount
+    if ! mountpoint -q "$mountpoint"; then
+        zfs mount "$dataset_path"
+    fi
+
+    if [ -d "$mountpoint" ]; then
+        chown root:apps "$mountpoint"
+        chmod 770 "$mountpoint"
+    fi
+}
+
+# Function to create directories
+create_directory() {
+    local dir="$1"
+    dir=$(echo "$dir" | tr '[:upper:]' '[:lower:]')
+    if [ ! -d "$dir" ]; then
+        mkdir -p "$dir"
+        chown root:apps "$dir"
+        chmod 770 "$dir"
+    else
+        chown root:apps "$dir"
+        chmod 770 "$dir"
     fi
 }
 
 # Create config datasets
+create_dataset "$CONFIG_POOL" "configs"
 for dataset in "${CONFIG_DATASETS[@]}"; do
-    create_dataset "$CONFIG_POOL" "$dataset"
+    create_dataset "$CONFIG_POOL" "configs/$dataset"
 done
 
-# Create media directories
+# Create media dataset
+create_dataset "$MEDIA_POOL" "media"
 for subdir in "${MEDIA_SUBDIRECTORIES[@]}"; do
-    create_dataset "$MEDIA_POOL/media" "$subdir"
+    create_directory "/mnt/$MEDIA_POOL/media/$subdir"
 done
 
-# Ensure YAML output dir exists
-mkdir -p "$YAML_OUTPUT_DIR"
+# Ensure Docker Compose and YAML directories
+create_directory "$DOCKER_COMPOSE_PATH"
+create_directory "$YAML_PATH"
 
-# Function to write YAML
-write_yaml() {
-    local app_name="$1"
-    local yaml_content="$2"
-    local file="$YAML_OUTPUT_DIR/$app_name.yml"
-    echo "$yaml_content" > "$file"
-    echo "YAML for $app_name written to $file"
+# Generate YAMLs for each app
+generate_yaml() {
+    local app="$1"
+    local image="$2"
+    local ports="$3"
+    local extra_env="$4"
+    local volumes="$5"
+    local container_name="$app"
+
+    # NVIDIA option
+    local runtime_line=""
+    if [ "$USE_NVIDIA" = "yes" ]; then
+        runtime_line="runtime: nvidia"
+    fi
+
+    cat > "$YAML_PATH/$app.yaml" <<EOF
+version: '3'
+services:
+  $container_name:
+    image: $image
+    container_name: $container_name
+    restart: unless-stopped
+    ports:
+      - $ports
+    environment:
+      - TZ=Europe/Amsterdam
+      - PUID=568
+      - PGID=568
+$extra_env
+    volumes:
+$volumes
+    $runtime_line
+networks:
+  media_network:
+    driver: bridge
+EOF
+    echo "YAML for $app generated at $YAML_PATH/$app.yaml"
 }
 
-# --------------- YAML Definitions -----------------
+# Prowlarr
+generate_yaml "prowlarr" "linuxserver/prowlarr" "9696:9696" "" "      - /mnt/$CONFIG_POOL/configs/prowlarr:/config\n      - /mnt/$MEDIA_POOL/media:/media"
 
-# 1. Prowlarr
-write_yaml "prowlarr" "--- 
-version: '3'
-services:
-  prowlarr:
-    image: linuxserver/prowlarr
-    container_name: prowlarr
-    restart: unless-stopped
-    ports:
-      - 9696:9696
-    networks:
-      - media_network
-    volumes:
-      - /mnt/$CONFIG_POOL/prowlarr:/config
-      - /mnt/$MEDIA_POOL/media:/media
-networks:
-  media_network:
-    driver: bridge
-"
+# Radarr
+generate_yaml "radarr" "linuxserver/radarr" "7878:7878" "" "      - /mnt/$CONFIG_POOL/configs/radarr:/config\n      - /mnt/$MEDIA_POOL/media:/media"
 
-# 2. Radarr
-write_yaml "radarr" "--- 
-version: '3'
-services:
-  radarr:
-    image: linuxserver/radarr
-    container_name: radarr
-    restart: unless-stopped
-    ports:
-      - 7878:7878
-    environment:
-      - PUID=568
-      - PGID=568
-      - TZ=Europe/Amsterdam
-    networks:
-      - media_network
-    volumes:
-      - /mnt/$CONFIG_POOL/radarr:/config
-      - /mnt/$MEDIA_POOL/media:/media
-networks:
-  media_network:
-    driver: bridge
-"
+# Sonarr
+generate_yaml "sonarr" "linuxserver/sonarr" "8989:8989" "" "      - /mnt/$CONFIG_POOL/configs/sonarr:/config\n      - /mnt/$MEDIA_POOL/media:/media"
 
-# 3. Sonarr
-write_yaml "sonarr" "--- 
-version: '3'
-services:
-  sonarr:
-    image: linuxserver/sonarr
-    container_name: sonarr
-    restart: unless-stopped
-    ports:
-      - 8989:8989
-    environment:
-      - PUID=568
-      - PGID=568
-      - TZ=Europe/Amsterdam
-    networks:
-      - media_network
-    volumes:
-      - /mnt/$CONFIG_POOL/sonarr:/config
-      - /mnt/$MEDIA_POOL/media:/media
-networks:
-  media_network:
-    driver: bridge
-"
+# Jellyseerr
+generate_yaml "jellyseerr" "fallenbagel/jellyseerr" "5055:5055" "      - USER=568:568" "      - /mnt/$CONFIG_POOL/configs/jellyseerr:/app/config"
 
-# 4. Jellyseerr
-write_yaml "jellyseerr" "--- 
-version: '3'
-services:
-  jellyseerr:
-    image: fallenbagel/jellyseerr
-    container_name: jellyseerr
-    restart: unless-stopped
-    ports:
-      - 5055:5055
-    environment:
-      - TZ=Europe/Amsterdam
-    networks:
-      - media_network
-    user: '568:568'
-    volumes:
-      - /mnt/$CONFIG_POOL/jellyseerr:/app/config
-networks:
-  media_network:
-    driver: bridge
-"
+# Profilarr
+generate_yaml "profilarr" "santiagosayshey/profilarr:latest" "6868:6868" "" "      - /mnt/$CONFIG_POOL/configs/profilarr:/config"
 
-# 5. Profilarr
-write_yaml "profilarr" "--- 
-version: '3'
-services:
-  profilarr:
-    image: santiagosayshey/profilarr:latest
-    container_name: profilarr
-    restart: unless-stopped
-    ports:
-      - 6868:6868
-    environment:
-      - TZ=Europe/Amsterdam
-    networks:
-      - media_network
-    volumes:
-      - /mnt/$CONFIG_POOL/profilarr:/config
-networks:
-  media_network:
-    driver: bridge
-"
+# Bazarr
+generate_yaml "bazarr" "linuxserver/bazarr" "6767:6767" "" "      - /mnt/$CONFIG_POOL/configs/bazarr:/config\n      - /mnt/$MEDIA_POOL/media:/media"
 
-# 6. Bazarr
-write_yaml "bazarr" "--- 
-version: '3'
-services:
-  bazarr:
-    image: linuxserver/bazarr
-    container_name: bazarr
-    restart: unless-stopped
-    ports:
-      - 6767:6767
-    environment:
-      - PUID=568
-      - PGID=568
-      - TZ=Europe/Amsterdam
-    networks:
-      - media_network
-    volumes:
-      - /mnt/$CONFIG_POOL/bazarr:/config
-      - /mnt/$MEDIA_POOL/media:/media
-networks:
-  media_network:
-    driver: bridge
-"
+# Jellyfin
+generate_yaml "jellyfin" "lscr.io/linuxserver/jellyfin:latest" "8096:8096" "" "      - /mnt/$CONFIG_POOL/configs/jellyfin:/config\n      - /mnt/$MEDIA_POOL/media:/media"
 
-# 7. Jellyfin
-write_yaml "jellyfin" "--- 
-version: '3'
-services:
-  jellyfin:
-    container_name: jellyfin
-    image: lscr.io/linuxserver/jellyfin:latest
-    restart: unless-stopped
-    ports:
-      - '8096:8096'
-    environment:
-      - PUID=568
-      - PGID=568
-      - TZ=Europe/Amsterdam
-    networks:
-      - media_network
-    volumes:
-      - /mnt/$CONFIG_POOL/jellyfin:/config
-      - /mnt/$MEDIA_POOL/media:/media
-networks:
-  media_network:
-    driver: bridge
-"
-
-# 8. qBittorrent
-write_yaml "qbittorrent" "--- 
-version: '3'
-services:
-  qbittorrent:
-    container_name: qbittorrent
-    image: ghcr.io/hotio/qbittorrent
-    restart: unless-stopped
-    ports:
-      - 10080:10080
-    environment:
-      - PUID=568
-      - PGID=568
-      - UMASK=002
-      - TZ=Europe/Amsterdam
+# Qbittorrent
+QBT_EXTRA_ENV=$(cat <<EOF
       - WEBUI_PORT=10080
-      - INCOMPLETE_DIR=/mnt/STORAGE/media/incomplete
-      - COMPLETED_DIR=/mnt/STORAGE/media/Completed
-      - COMPLETED_TORRENTS_DIR=/mnt/STORAGE/media/Completed_Torrents
+      - INCOMPLETE_DIR=/mnt/$MEDIA_POOL/media/incomplete
+      - COMPLETED_DIR=/mnt/$MEDIA_POOL/media/completed
+      - COMPLETED_TORRENTS_DIR=/mnt/$MEDIA_POOL/media/completed_torrents
       - GLOBAL_MAX_CONNECTIONS=500
       - MAX_CONNECTIONS_PER_TORRENT=100
       - GLOBAL_MAX_UPLOADS=20
@@ -245,57 +154,15 @@ services:
       - RSS_MAX_ARTICLES=500
       - RSS_AUTO_DOWNLOAD=true
       - TORRENT_MODE=automatic
-    networks:
-      - media_network
-    volumes:
-      - /mnt/$CONFIG_POOL/qbittorrent:/config
-      - /mnt/$MEDIA_POOL/media:/media
-networks:
-  media_network:
-    driver: bridge
-"
+EOF
+)
+generate_yaml "qbittorrent" "ghcr.io/hotio/qbittorrent" "10080:10080" "$QBT_EXTRA_ENV" "      - /mnt/$CONFIG_POOL/configs/qbittorrent:/config\n      - /mnt/$MEDIA_POOL/media:/media"
 
-# 9. Dozzle
-write_yaml "dozzle" "--- 
-version: '3'
-services:
-  dozzle:
-    image: amir20/dozzle
-    container_name: dozzle
-    restart: unless-stopped
-    ports:
-      - '8888:8080'
-    networks:
-      - media_network
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /mnt/$CONFIG_POOL/dozzle:/data
-networks:
-  media_network:
-    driver: bridge
-"
+# Dozzle
+generate_yaml "dozzle" "amir20/dozzle" "8888:8080" "" "      - /var/run/docker.sock:/var/run/docker.sock\n      - /mnt/$CONFIG_POOL/configs/dozzle:/data"
 
-# 10. Watchtower
-write_yaml "watchtower" "--- 
-version: '3'
-services:
-  watchtower:
-    container_name: watchtower
-    image: nickfedor/watchtower
-    restart: unless-stopped
-    environment:
-      - TZ=Europe/Amsterdam
-      - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_NOTIFICATIONS_HOSTNAME=TrueNAS
-      - WATCHTOWER_INCLUDE_STOPPED=true
-      - WATCHTOWER_DISABLE_CONTAINERS=ix*
-      - WATCHTOWER_NO_STARTUP_MESSAGE=true
-      - WATCHTOWER_SCHEDULE=0 0 3 * * *
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-networks:
-  media_network:
-    driver: bridge
-"
+# Watchtower
+generate_yaml "watchtower" "nickfedor/watchtower" "" "      - WATCHTOWER_CLEANUP=true\n      - WATCHTOWER_NOTIFICATIONS_HOSTNAME=TrueNAS\n      - WATCHTOWER_INCLUDE_STOPPED=true\n      - WATCHTOWER_DISABLE_CONTAINERS=ix*\n      - WATCHTOWER_NO_STARTUP_MESSAGE=true\n      - WATCHTOWER_SCHEDULE=0 0 3 * * *" "      - /var/run/docker.sock:/var/run/docker.sock"
 
-echo "✅ All YAML files generated in $YAML_OUTPUT_DIR"
+echo "All YAML files generated in $YAML_PATH"
+echo "You can now copy these into the TrueNAS Scale 'Install via YAML' interface."
