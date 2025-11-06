@@ -1,95 +1,59 @@
 #!/bin/bash
 
-# Prompt the user for pool names
-read -p "Enter the pool name for configs: " CONFIG_POOL
-read -p "Enter the pool name for media (can be same as configs): " MEDIA_POOL
+# Permanent pool names
+CONFIG_POOL="APPS"
+MEDIA_POOL="STORAGE"
 
-# Retrieve the private IP address of the server and convert it to CIDR notation
+# Retrieve private IP for CIDR (if needed)
 PRIVATE_IP=$(hostname -I | awk '{print $1}')
 CIDR_NETWORK="${PRIVATE_IP%.*}.0/24"
 
 # Define datasets and directories
-CONFIG_DATASETS=("prowlarr" "radarr" "sonarr" "jellyseerr" "profilarr" "bazarr" "jellyfin" "qbittorrent" "dozzle")
-MEDIA_SUBDIRECTORIES=("movies" "tv" "downloads")
+CONFIG_DATASETS=("prowlarr" "radarr" "sonarr" "jellyseerr" "profilarr" "bazarr" "jellyfin" "qbittorrent" "dozzle" "watchtower")
+MEDIA_SUBDIRECTORIES=("movies" "tv" "downloads" "incomplete" "Completed" "Completed_Torrents")
 DOCKER_COMPOSE_PATH="/mnt/$CONFIG_POOL/docker"
-QBITTORRENT_WIREGUARD_DIR="/mnt/$CONFIG_POOL/configs/qbittorrent/wireguard"
+YAML_OUTPUT_DIR="$DOCKER_COMPOSE_PATH/yamls"
 
-# Function to create and set up a dataset
+# Function to create dataset
 create_dataset() {
-    local pool_name="$1"
-    local dataset_name="$2"
-    local dataset_path="$pool_name/$dataset_name"
-    local mountpoint="/mnt/$dataset_path"
-
-    if ! zfs list "$dataset_path" >/dev/null 2>&1; then
-        echo "Creating dataset: $dataset_path"
-        zfs create "$dataset_path"
-    fi
-
-    # Ensure dataset is mounted
-    if ! mountpoint -q "$mountpoint"; then
-        echo "Mounting dataset: $dataset_path"
-        zfs mount "$dataset_path"
-    fi
-
-    # Verify mount exists before applying permissions
-    if [ -d "$mountpoint" ]; then
-        chown root:apps "$mountpoint"
-        chmod 770 "$mountpoint"
-    else
-        echo "⚠️ Warning: $mountpoint does not exist after mounting. Check dataset status."
+    local pool="$1"
+    local dataset="$2"
+    local path="/mnt/$pool/$dataset"
+    if [ ! -d "$path" ]; then
+        echo "Creating dataset/directory: $path"
+        mkdir -p "$path"
+        chown root:apps "$path"
+        chmod 770 "$path"
     fi
 }
 
-# Function to create a directory if it doesn't exist
-create_directory() {
-    local dir_path="$1"
-    if [ ! -d "$dir_path" ]; then
-        echo "Creating directory: $dir_path"
-        mkdir -p "$dir_path"
-        chown root:apps "$dir_path"
-        chmod 770 "$dir_path"
-    else
-        echo "Directory already exists: $dir_path, updating permissions..."
-        chown root:apps "$dir_path"
-        chmod 770 "$dir_path"
-    fi
-}
-
-# Create the "configs" dataset (parent) on the config pool
-create_dataset "$CONFIG_POOL" "configs"
-
-# Create the config datasets on the config pool
+# Create config datasets
 for dataset in "${CONFIG_DATASETS[@]}"; do
-    create_dataset "$CONFIG_POOL" "configs/$dataset"
+    create_dataset "$CONFIG_POOL" "$dataset"
 done
 
-# Create the "media" dataset on the media pool
-create_dataset "$MEDIA_POOL" "media"
-
-# Create subdirectories inside the media dataset
+# Create media directories
 for subdir in "${MEDIA_SUBDIRECTORIES[@]}"; do
-    create_directory "/mnt/$MEDIA_POOL/media/$subdir"
+    create_dataset "$MEDIA_POOL/media" "$subdir"
 done
 
-# Ensure Docker Compose directory exists
-create_directory "$DOCKER_COMPOSE_PATH"
+# Ensure YAML output dir exists
+mkdir -p "$YAML_OUTPUT_DIR"
 
-# Ensure the Docker Compose file path exists
-DOCKER_COMPOSE_FILE="$DOCKER_COMPOSE_PATH/docker-compose.yml"
-if [ ! -d "$DOCKER_COMPOSE_PATH" ]; then
-    echo "⚠️ Docker Compose directory missing, creating: $DOCKER_COMPOSE_PATH"
-    mkdir -p "$DOCKER_COMPOSE_PATH"
-    chown root:apps "$DOCKER_COMPOSE_PATH"
-    chmod 770 "$DOCKER_COMPOSE_PATH"
-fi
+# Function to write YAML
+write_yaml() {
+    local app_name="$1"
+    local yaml_content="$2"
+    local file="$YAML_OUTPUT_DIR/$app_name.yml"
+    echo "$yaml_content" > "$file"
+    echo "YAML for $app_name written to $file"
+}
 
-# Generate docker-compose.yml
-cat > "$DOCKER_COMPOSE_FILE" <<EOF
-networks:
-  media_network:
-    driver: bridge
+# --------------- YAML Definitions -----------------
 
+# 1. Prowlarr
+write_yaml "prowlarr" "--- 
+version: '3'
 services:
   prowlarr:
     image: linuxserver/prowlarr
@@ -100,9 +64,17 @@ services:
     networks:
       - media_network
     volumes:
-      - /mnt/$CONFIG_POOL/configs/prowlarr:/config
+      - /mnt/$CONFIG_POOL/prowlarr:/config
       - /mnt/$MEDIA_POOL/media:/media
+networks:
+  media_network:
+    driver: bridge
+"
 
+# 2. Radarr
+write_yaml "radarr" "--- 
+version: '3'
+services:
   radarr:
     image: linuxserver/radarr
     container_name: radarr
@@ -112,13 +84,21 @@ services:
     environment:
       - PUID=568
       - PGID=568
-      - TZ=America/New_York
+      - TZ=Europe/Amsterdam
     networks:
       - media_network
     volumes:
-      - /mnt/$CONFIG_POOL/configs/radarr:/config
+      - /mnt/$CONFIG_POOL/radarr:/config
       - /mnt/$MEDIA_POOL/media:/media
+networks:
+  media_network:
+    driver: bridge
+"
 
+# 3. Sonarr
+write_yaml "sonarr" "--- 
+version: '3'
+services:
   sonarr:
     image: linuxserver/sonarr
     container_name: sonarr
@@ -128,13 +108,21 @@ services:
     environment:
       - PUID=568
       - PGID=568
-      - TZ=America/New_York
+      - TZ=Europe/Amsterdam
     networks:
       - media_network
     volumes:
-      - /mnt/$CONFIG_POOL/configs/sonarr:/config
+      - /mnt/$CONFIG_POOL/sonarr:/config
       - /mnt/$MEDIA_POOL/media:/media
+networks:
+  media_network:
+    driver: bridge
+"
 
+# 4. Jellyseerr
+write_yaml "jellyseerr" "--- 
+version: '3'
+services:
   jellyseerr:
     image: fallenbagel/jellyseerr
     container_name: jellyseerr
@@ -142,40 +130,42 @@ services:
     ports:
       - 5055:5055
     environment:
-      - TZ=America/New_York
+      - TZ=Europe/Amsterdam
     networks:
       - media_network
-    user: "568:568"
+    user: '568:568'
     volumes:
-      - /mnt/$CONFIG_POOL/configs/jellyseerr:/app/config
-      
-  flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
-    container_name: flaresolverr
-    environment:
-      - LOG_LEVEL=info
-      - LOG_HTML=false
-      - CAPTCHA_SOLVER=none
-      - TZ=America/New_York
-    networks:
-      - media_network
-    ports:
-      - 8191:8191
-    restart: unless-stopped
+      - /mnt/$CONFIG_POOL/jellyseerr:/app/config
+networks:
+  media_network:
+    driver: bridge
+"
 
+# 5. Profilarr
+write_yaml "profilarr" "--- 
+version: '3'
+services:
   profilarr:
     image: santiagosayshey/profilarr:latest
     container_name: profilarr
+    restart: unless-stopped
     ports:
       - 6868:6868
+    environment:
+      - TZ=Europe/Amsterdam
     networks:
       - media_network
     volumes:
-      - /mnt/$CONFIG_POOL/configs/profilarr:/config
-    environment:
-      - TZ=America/New_York
-    restart: unless-stopped
+      - /mnt/$CONFIG_POOL/profilarr:/config
+networks:
+  media_network:
+    driver: bridge
+"
 
+# 6. Bazarr
+write_yaml "bazarr" "--- 
+version: '3'
+services:
   bazarr:
     image: linuxserver/bazarr
     container_name: bazarr
@@ -185,62 +175,90 @@ services:
     environment:
       - PUID=568
       - PGID=568
-      - TZ=America/New_York
+      - TZ=Europe/Amsterdam
     networks:
       - media_network
     volumes:
-      - /mnt/$CONFIG_POOL/configs/bazarr:/config
+      - /mnt/$CONFIG_POOL/bazarr:/config
       - /mnt/$MEDIA_POOL/media:/media
+networks:
+  media_network:
+    driver: bridge
+"
 
+# 7. Jellyfin
+write_yaml "jellyfin" "--- 
+version: '3'
+services:
   jellyfin:
     container_name: jellyfin
+    image: lscr.io/linuxserver/jellyfin:latest
+    restart: unless-stopped
+    ports:
+      - '8096:8096'
     environment:
       - PUID=568
       - PGID=568
-      - TZ=America/New_York
-    image: lscr.io/linuxserver/jellyfin:latest
-    ports:
-      - '8096:8096'
-    restart: unless-stopped
+      - TZ=Europe/Amsterdam
     networks:
       - media_network
     volumes:
-      - /mnt/$CONFIG_POOL/configs/jellyfin:/config
+      - /mnt/$CONFIG_POOL/jellyfin:/config
       - /mnt/$MEDIA_POOL/media:/media
+networks:
+  media_network:
+    driver: bridge
+"
 
+# 8. qBittorrent
+write_yaml "qbittorrent" "--- 
+version: '3'
+services:
   qbittorrent:
     container_name: qbittorrent
     image: ghcr.io/hotio/qbittorrent
     restart: unless-stopped
     ports:
-      - 8080:8080
+      - 10080:10080
     environment:
       - PUID=568
       - PGID=568
       - UMASK=002
-      - TZ=America/New_York
-      - WEBUI_PORTS=8080/tcp,8080/udp
-      - VPN_ENABLED=true
-      - VPN_CONF=wg0
-      - VPN_PROVIDER=generic
-      - VPN_LAN_NETWORK=$CIDR_NETWORK,10.8.0.0/24
-      - VPN_LAN_LEAK_ENABLED=false
-      - VPN_EXPOSE_PORTS_ON_LAN=
-      - VPN_AUTO_PORT_FORWARD=true
-      - VPN_AUTO_PORT_FORWARD_TO_PORTS=
-      - VPN_FIREWALL_TYPE=auto
-      - VPN_HEALTHCHECK_ENABLED=false
-      - VPN_NAMESERVERS=wg
-      - PRIVOXY_ENABLED=false
-    cap_add:
-      - NET_ADMIN
-    sysctls:
-      - net.ipv4.conf.all.src_valid_mark=1
-      - net.ipv6.conf.all.disable_ipv6=1
+      - TZ=Europe/Amsterdam
+      - WEBUI_PORT=10080
+      - INCOMPLETE_DIR=/mnt/STORAGE/media/incomplete
+      - COMPLETED_DIR=/mnt/STORAGE/media/Completed
+      - COMPLETED_TORRENTS_DIR=/mnt/STORAGE/media/Completed_Torrents
+      - GLOBAL_MAX_CONNECTIONS=500
+      - MAX_CONNECTIONS_PER_TORRENT=100
+      - GLOBAL_MAX_UPLOADS=20
+      - MAX_UPLOADS_PER_TORRENT=4
+      - MAX_ACTIVE_DOWNLOADS=3
+      - MAX_ACTIVE_UPLOADS=100
+      - MAX_ACTIVE_TORRENTS=500
+      - COUNT_SLOW_TORRENTS=false
+      - TOTAL_SEED_TIME=50000
+      - DHT=false
+      - PEER_EXCHANGE=false
+      - LOCAL_PEER_DISCOVERY=false
+      - RSS_REFRESH_INTERVAL=30
+      - RSS_MAX_ARTICLES=500
+      - RSS_AUTO_DOWNLOAD=true
+      - TORRENT_MODE=automatic
+    networks:
+      - media_network
     volumes:
-      - /mnt/$CONFIG_POOL/configs/qbittorrent:/config
+      - /mnt/$CONFIG_POOL/qbittorrent:/config
       - /mnt/$MEDIA_POOL/media:/media
+networks:
+  media_network:
+    driver: bridge
+"
 
+# 9. Dozzle
+write_yaml "dozzle" "--- 
+version: '3'
+services:
   dozzle:
     image: amir20/dozzle
     container_name: dozzle
@@ -251,197 +269,33 @@ services:
       - media_network
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /mnt/$CONFIG_POOL/configs/dozzle:/data
+      - /mnt/$CONFIG_POOL/dozzle:/data
+networks:
+  media_network:
+    driver: bridge
+"
 
+# 10. Watchtower
+write_yaml "watchtower" "--- 
+version: '3'
+services:
   watchtower:
     container_name: watchtower
+    image: nickfedor/watchtower
+    restart: unless-stopped
     environment:
-      - TZ=America/New_York
+      - TZ=Europe/Amsterdam
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_NOTIFICATIONS_HOSTNAME=TrueNAS
       - WATCHTOWER_INCLUDE_STOPPED=true
       - WATCHTOWER_DISABLE_CONTAINERS=ix*
       - WATCHTOWER_NO_STARTUP_MESSAGE=true
       - WATCHTOWER_SCHEDULE=0 0 3 * * *
-    image: nickfedor/watchtower
-    restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+networks:
+  media_network:
+    driver: bridge
+"
 
-      
-EOF
-
-echo "Docker Compose file created at $DOCKER_COMPOSE_FILE"
-echo "Script completed."
-
-# Ask the user if they want to launch the Docker containers
-read -p "Would you like to launch the Docker containers now? (yes/no): " LAUNCH_CONTAINERS
-# Launch Docker containers
-if [[ "$LAUNCH_CONTAINERS" =~ ^[Yy]es$ ]]; then
-    # Ensure the WireGuard directory exists
-    create_directory "$QBITTORRENT_WIREGUARD_DIR"
-
-    # Prompt the user to paste their WireGuard VPN configuration
-    echo "Please paste your WireGuard VPN configuration below by using SHIFT+INS to paste (press ENTER then Ctrl+D when done):"
-    WG_CONFIG=$(cat)
-
-    # Save the VPN configuration as wg0.conf
-    echo "$WG_CONFIG" > "$QBITTORRENT_WIREGUARD_DIR/wg0.conf"
-    chown root:apps "$QBITTORRENT_WIREGUARD_DIR/wg0.conf"
-    chmod 660 "$QBITTORRENT_WIREGUARD_DIR/wg0.conf"
-    echo "WireGuard configuration saved to $QBITTORRENT_WIREGUARD_DIR/wg0.conf"
-
-    # Change to the Docker Compose directory and launch the containers
-    cd "$DOCKER_COMPOSE_PATH"
-    echo "Launching Docker containers from $DOCKER_COMPOSE_PATH..."
-    docker compose up -d
-
-    if [ $? -eq 0 ]; then
-        echo "Docker containers launched successfully!"
-
-        # Modify qBittorrent.conf after the container is running
-        QBITTORRENT_CONF_FILE="/mnt/$CONFIG_POOL/configs/qbittorrent/config/qBittorrent.conf"
-        echo "Waiting for qBittorrent to generate its configuration file..."
-        while [ ! -f "$QBITTORRENT_CONF_FILE" ]; do
-            sleep 5
-            echo "Waiting for $QBITTORRENT_CONF_FILE to be created..."
-        done
-
-        # Update or add the DefaultSavePath in the [BitTorrent] section
-        if grep -q "\[BitTorrent\]" "$QBITTORRENT_CONF_FILE"; then
-            echo "[BitTorrent] section found in $QBITTORRENT_CONF_FILE"
-            if grep -q "Session\\DefaultSavePath=" "$QBITTORRENT_CONF_FILE"; then
-                echo "Updating Session\\DefaultSavePath in $QBITTORRENT_CONF_FILE"
-                sed -i "/\[BitTorrent\]/,/^\[/ s|Session\\DefaultSavePath=.*|Session\\DefaultSavePath=/media/downloads|" "$QBITTORRENT_CONF_FILE"
-            else
-                echo "Adding Session\\DefaultSavePath under [BitTorrent] section in $QBITTORRENT_CONF_FILE"
-                sed -i "/\[BitTorrent\]/a Session\\DefaultSavePath=/media/downloads" "$QBITTORRENT_CONF_FILE"
-            fi
-        else
-            echo "[BitTorrent] section not found in $QBITTORRENT_CONF_FILE"
-            echo "Adding [BitTorrent] section and Session\\DefaultSavePath to $QBITTORRENT_CONF_FILE"
-            echo -e "\n[BitTorrent]\nSession\\DefaultSavePath=/media/downloads" >> "$QBITTORRENT_CONF_FILE"
-        fi
-
-        echo "qBittorrent default save path set to /media/downloads in $QBITTORRENT_CONF_FILE"
-
-        # Restart the qBittorrent container to apply the changes
-        echo "Restarting qBittorrent container to apply the new configuration..."
-        docker restart qbittorrent
-
-        echo "qBittorrent configuration updated and container restarted."
-
-        # Extract API keys from Radarr and Sonarr config files
-        echo "Extracting API keys from Radarr and Sonarr..."
-        RADARR_CONFIG_FILE="/mnt/$CONFIG_POOL/configs/radarr/config.xml"
-        SONARR_CONFIG_FILE="/mnt/$CONFIG_POOL/configs/sonarr/config.xml"
-
-        # Function to extract API key from config file
-        extract_api_key() {
-            local config_file="$1"
-            if [ -f "$config_file" ]; then
-                grep -oP '(?<=<ApiKey>)[^<]+' "$config_file"
-            else
-                echo ""
-            fi
-        }
-
-        # Wait for config files to be generated
-        echo "Waiting for Radarr and Sonarr to generate config files..."
-        while [ ! -f "$RADARR_CONFIG_FILE" ] || [ ! -f "$SONARR_CONFIG_FILE" ]; do
-            sleep 5
-            echo "Waiting for config files..."
-        done
-
-        # Extract Radarr API key
-        RADARR_API_KEY=$(extract_api_key "$RADARR_CONFIG_FILE")
-        if [ -z "$RADARR_API_KEY" ]; then
-            echo "⚠️ Warning: Radarr API key not found in $RADARR_CONFIG_FILE"
-        else
-            echo "Radarr API key extracted successfully"
-        fi
-
-        # Extract Sonarr API key
-        SONARR_API_KEY=$(extract_api_key "$SONARR_CONFIG_FILE")
-        if [ -z "$SONARR_API_KEY" ]; then
-            echo "⚠️ Warning: Sonarr API key not found in $SONARR_CONFIG_FILE"
-        else
-            echo "Sonarr API key extracted successfully"
-        fi
-
-        # Add root folders to Radarr and Sonarr using their APIs
-        if [ -n "$RADARR_API_KEY" ] && [ -n "$SONARR_API_KEY" ]; then
-            echo "Adding root folders to Radarr and Sonarr..."
-
-            # Wait for Radarr and Sonarr to be fully initialized
-            echo "Waiting for Radarr and Sonarr to be ready..."
-            until curl -s "http://localhost:7878/api/v3/system/status" -o /dev/null; do sleep 5; done
-            until curl -s "http://localhost:8989/api/v3/system/status" -o /dev/null; do sleep 5; done
-
-            # Add root folder to Radarr
-            echo "Adding root folder to Radarr..."
-            curl -X POST "http://localhost:7878/api/v3/rootfolder" \
-              -H "X-Api-Key: $RADARR_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d '{
-                    "path": "/media/movies"
-                  }'
-
-            # Add root folder to Sonarr
-            echo "Adding root folder to Sonarr..."
-            curl -X POST "http://localhost:8989/api/v3/rootfolder" \
-              -H "X-Api-Key: $SONARR_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d '{
-                    "path": "/media/tv"
-                  }'
-
-            echo "Root folders added successfully!"
-        else
-            echo "⚠️ Skipping root folder creation due to missing API keys. You can add them manually later."
-        fi
-    else
-        echo "⚠️ Failed to launch Docker containers. Check the logs for errors."
-    fi
-else
-    echo "Docker containers were not launched. You can start them manually by running:"
-    echo "cd $DOCKER_COMPOSE_PATH && docker compose up -d"
-fi
-# Print running containers and their accessible URLs
-if [[ "$LAUNCH_CONTAINERS" =~ ^[Yy]es$ ]]; then
-    echo "Listing all running containers and their accessible URLs:"
-
-    # Get the host's IP address
-    host_ip=$(hostname -I | awk '{print $1}')
-
-    # Get a list of all running containers
-    docker ps --format "{{.Names}}" | while read -r container_name; do
-        # Get the container's exposed ports
-        ports=$(docker inspect -f '{{range $p, $conf := .NetworkSettings.Ports}}{{if $conf}}{{ (index $conf 0).HostPort }} {{end}}{{end}}' "$container_name")
-
-        # Print the container name and its accessible URL
-        if [ -n "$ports" ]; then
-            for port in $ports; do
-                echo "$container_name | http://$host_ip:$port"
-            done
-        else
-            echo "$container_name | No exposed port found"
-        fi
-    done
-
-    # Extract and print the qBittorrent password from the logs
-    qbittorrent_container="qbittorrent"
-    if docker ps --format "{{.Names}}" | grep -q "$qbittorrent_container"; then
-        echo "Fetching qBittorrent password from logs..."
-        # Wait a few seconds for qBittorrent to fully start and log the password
-        sleep 10
-        qbittorrent_password=$(docker logs "$qbittorrent_container" 2>&1 | grep -oP 'A temporary password is provided for this session: \K\S+' | tail -1)
-        if [ -n "$qbittorrent_password" ]; then
-            echo "qBittorrent WebUI password: $qbittorrent_password"
-        else
-            echo "qBittorrent WebUI password not found in logs. The container may still be starting."
-        fi
-    else
-        echo "qBittorrent container is not running."
-    fi
-fi
+echo "✅ All YAML files generated in $YAML_OUTPUT_DIR"
