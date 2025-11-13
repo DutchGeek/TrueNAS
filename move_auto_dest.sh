@@ -14,13 +14,13 @@ list_dirs() {
     for SUB in "$DIR"/*/; do
         [ -d "$SUB" ] || continue
         FILE_COUNT=$(find "$SUB" -maxdepth 1 -type f | wc -l)
-        DIRS+=("$SUB")
-        printf "%d) %s (%d files)\n" "$i" "$(basename "$SUB")" "$FILE_COUNT"
+        DIRS+=("${SUB%/}")  # remove trailing slash
+        printf "%d) %s (%d files)\n" "$i" "$(basename "${SUB%/}")" "$FILE_COUNT"
         i=$((i+1))
     done
 }
 
-# Interactive directory selection
+# Interactive directory selection: one level at a time
 select_directory() {
     local CURRENT="$1"
     while true; do
@@ -33,20 +33,23 @@ select_directory() {
         if [[ "$CHOICE" =~ ^[0-9]+$ ]] && [ "$CHOICE" -ge 1 ] && [ "$CHOICE" -le "${#DIRS[@]}" ]; then
             SELECTED="${DIRS[$((CHOICE-1))]}"
             echo -e "\nYou've selected: $SELECTED"
+
             # Show 1-level contents
             echo "Contents of this directory (1 level deep):"
             for SUB in "$SELECTED"/*/; do
                 [ -d "$SUB" ] || continue
                 FILE_COUNT=$(find "$SUB" -maxdepth 1 -type f | wc -l)
-                printf "  %s (%d files)\n" "$(basename "$SUB")" "$FILE_COUNT"
+                printf "  %s (%d files)\n" "$(basename "${SUB%/}")" "$FILE_COUNT"
             done
+
+            # Confirm selection
             echo -n "Is this the directory you want to copy from? [y/N]: "
             read CONFIRM
             if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
                 echo "$SELECTED"
                 return
             else
-                CURRENT="$SELECTED"
+                echo "Returning to parent level..."
             fi
         else
             echo "Invalid selection. Try again."
@@ -90,7 +93,7 @@ read
 # Actual move
 rsync -aAX --remove-source-files --info=progress2,stats2 --partial "$SRC/" "$DST/" | grep -E "$REGEX"
 
-# Clean empty directories
+# Clean empty directories in source
 find "$SRC" -type d -empty -delete
 
 echo -e "\nMove complete and empty directories cleaned!"
