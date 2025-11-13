@@ -31,7 +31,7 @@ else
     fi
 fi
 
-# --- List second-level directories (do not display contents) ---
+# --- List second-level directories ---
 mapfile -t SUB_DIRS < <(find "$TOP_DIR" -mindepth 1 -maxdepth 1 -type d | sort)
 if [ "${#SUB_DIRS[@]}" -eq 0 ]; then
     SRC="$TOP_DIR"
@@ -67,19 +67,10 @@ mkdir -p "$DST"
 echo -e "\nSource: $SRC"
 echo "Destination: $DST"
 
-# --- Dry run (filtered) ---
-echo -e "\nStarting dry run (filtered output)..."
-rsync -aAXn --remove-source-files --info=progress2,stats2 --partial "$SRC/" "$DST/" \
-    | grep -E 'sent|Number of files transferred|^./'
-
-echo -e "\nDry run complete. Press Enter to start actual move..."
-read
-
-# --- Count directories and files ---
+# --- Move ---
 DIR_COUNT=$(find "$SRC" -type d | wc -l)
 FILE_COUNT=$(find "$SRC" -type f | wc -l)
 
-# --- Actual move ---
 rsync -aAX --remove-source-files --info=progress2,stats2 --partial "$SRC/" "$DST/" \
     | grep -E 'sent|Number of files transferred|^./'
 
