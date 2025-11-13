@@ -7,7 +7,7 @@ LEVELS=2
 REGEX="^./([^/]+/){0,$((LEVELS-1))}[^/]+|sent|Number of files transferred"
 
 # Base source directory
-BASE_SRC="/mnt/tank/media"
+BASE_SRC="/mnt/tank/storage-share/Media"
 
 # Find directories up to 3 levels deep for selection
 echo "Available source directories (up to 3 levels deep) under $BASE_SRC:"
