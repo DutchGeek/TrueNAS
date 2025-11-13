@@ -4,56 +4,61 @@
 REGEX="^./([^/]+/){0,1}[^/]+|sent|Number of files transferred"
 BASE_SRC="/mnt/tank/storage-share/Media"
 
-# Function: print 1-level tree with file counts and colors
+# Function: print 1-level tree with file counts
 print_tree_one_level() {
     local DIR="$1"
     mapfile -t SUBDIRS < <(find "$DIR" -mindepth 1 -maxdepth 1 -type d | sort)
     for SUB in "${SUBDIRS[@]}"; do
         FILE_COUNT=$(find "$SUB" -maxdepth 1 -type f | wc -l)
-        echo -e "\033[1;34m$(basename "$SUB")\033[0m ($FILE_COUNT files)"
+        echo -e "  \033[1;34m$(basename "$SUB")\033[0m ($FILE_COUNT files)"
     done
 }
 
-# Function: interactive selection with 1-level preview
+# Function: show directory options with preview before selection
 select_directory() {
     local CURRENT_DIR="$1"
     while true; do
         mapfile -t DIRS < <(find "$CURRENT_DIR" -mindepth 1 -maxdepth 1 -type d | sort)
         if [ ${#DIRS[@]} -eq 0 ]; then
             echo "No further subdirectories in $CURRENT_DIR"
-            break
+            return "$CURRENT_DIR"
         fi
 
-        COLUMNS=1
-        echo "Which directory do you want to move?"
-        select DIR in "${DIRS[@]}"; do
-            if [ -n "$DIR" ]; then
-                # Show selection and its contents
-                echo -e "\nYou've selected: $DIR"
-                echo "I see the following contents (1 level deep):"
-                print_tree_one_level "$DIR"
-
-                read -p "Is this the directory you want to copy from? [y/N]: " CONFIRM
-                if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
-                    echo "Directory confirmed: $DIR"
-                    echo "$DIR"
-                    return
-                else
-                    CURRENT_DIR="$DIR"
-                    break
-                fi
-            else
-                echo "Invalid selection. Try again."
-            fi
+        echo -e "\nAvailable directories under $CURRENT_DIR:"
+        for i in "${!DIRS[@]}"; do
+            DIR="${DIRS[$i]}"
+            FILE_COUNT=$(find "$DIR" -maxdepth 1 -type f | wc -l)
+            echo -e "$((i+1))) \033[1;34m$(basename "$DIR")\033[0m ($FILE_COUNT files)"
         done
+
+        COLUMNS=1
+        echo
+        read -p "Enter the number of the directory you want to move: " CHOICE
+
+        if [[ "$CHOICE" =~ ^[0-9]+$ ]] && [ "$CHOICE" -ge 1 ] && [ "$CHOICE" -le "${#DIRS[@]}" ]; then
+            DIR="${DIRS[$((CHOICE-1))]}"
+            echo -e "\nYou've selected: $DIR"
+            echo "Contents of this directory (1 level deep):"
+            print_tree_one_level "$DIR"
+
+            read -p "Is this the directory you want to copy from? [y/N]: " CONFIRM
+            if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+                echo "Directory confirmed: $DIR"
+                echo "$DIR"
+                return
+            else
+                CURRENT_DIR="$DIR"
+            fi
+        else
+            echo "Invalid selection. Try again."
+        fi
     done
-    echo "$CURRENT_DIR"
 }
 
 # Start interactive selection
 SRC=$(select_directory "$BASE_SRC")
 
-# Compute destination suggestion based on full relative path from base
+# Compute destination suggestion based on relative path from base
 REL_PATH="${SRC#$BASE_SRC/}"   # strip the base path
 DST_SUGGEST=$(echo "$REL_PATH" | tr '[:upper:]' '[:lower:]')
 read -p "Enter destination folder name (default: $DST_SUGGEST, under /mnt/tank/media): " DST_SUB
