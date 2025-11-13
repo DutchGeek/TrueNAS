@@ -18,6 +18,8 @@ select_directory() {
             break
         fi
 
+        # Force vertical list
+        COLUMNS=1
         echo "Subdirectories in $CURRENT_DIR:"
         select DIR in "${DIRS[@]}"; do
             if [ -n "$DIR" ]; then
