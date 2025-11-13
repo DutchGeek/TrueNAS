@@ -5,7 +5,20 @@ BASE_DST="/mnt/tank/media"
 
 echo "Welcome! This script will move directories under $BASE_SRC."
 
-# List subdirectories 1 level deep (skip only completely empty ones)
+# --- List top-level directories (show all, even if empty) ---
+list_dirs_top() {
+    local DIR="$1"
+    DIRS=()
+    local i=1
+    for SUB in "$DIR"/*/; do
+        [ -d "$SUB" ] || continue
+        DIRS+=("${SUB%/}")
+        echo "$i) $(basename "${SUB%/}")"
+        i=$((i+1))
+    done
+}
+
+# --- List subdirectories (skip completely empty ones) ---
 list_dirs() {
     local DIR="$1"
     DIRS=()
@@ -22,18 +35,16 @@ list_dirs() {
 }
 
 # --- Select top-level directory ---
-list_dirs "$BASE_SRC"
+echo -e "\nAvailable top-level directories:"
+list_dirs_top "$BASE_SRC"
+
 if [ "${#DIRS[@]}" -eq 0 ]; then
-    echo "No directories available to move."
+    echo "No top-level directories found. Exiting."
     exit 1
 elif [ "${#DIRS[@]}" -eq 1 ]; then
     TOP_DIR="${DIRS[0]}"
     echo "Only one top-level directory found. Automatically selecting: $(basename "$TOP_DIR")"
 else
-    echo -e "\nAvailable top-level directories:"
-    for i in "${!DIRS[@]}"; do
-        echo "$((i+1))) $(basename "${DIRS[$i]}")"
-    done
     echo -n "Enter the number of the top-level directory: "
     read NUM1
     if [[ "$NUM1" =~ ^[0-9]+$ ]] && [ "$NUM1" -ge 1 ] && [ "$NUM1" -le "${#DIRS[@]}" ]; then
@@ -44,7 +55,7 @@ else
     fi
 fi
 
-# --- Second-level selection (auto if only one subdir) ---
+# --- Second-level selection ---
 list_dirs "$TOP_DIR"
 if [ "${#DIRS[@]}" -eq 0 ]; then
     SRC="$TOP_DIR"
@@ -68,20 +79,19 @@ fi
 
 echo -e "\nYou've selected: $SRC"
 
-# Destination prompt with default suggestion
+# --- Destination prompt ---
 REL_PATH="${SRC#$BASE_SRC/}"
 DST_SUGGEST=$(echo "$REL_PATH" | tr '[:upper:]' '[:lower:]')
 echo -n "Enter destination folder name (default: $DST_SUGGEST, under $BASE_DST): "
 read DST_SUB
 DST_SUB=${DST_SUB:-$DST_SUGGEST}
 DST="$BASE_DST/$DST_SUB"
-
 mkdir -p "$DST"
 
 echo -e "\nSource: $SRC"
 echo "Destination: $DST"
 
-# Dry run with filtered output
+# --- Dry run ---
 echo -e "\nStarting dry run (filtered output)..."
 rsync -aAXn --remove-source-files --info=progress2,stats2 --partial "$SRC/" "$DST/" \
     | grep -E 'sent|Number of files transferred|^./'
@@ -89,18 +99,18 @@ rsync -aAXn --remove-source-files --info=progress2,stats2 --partial "$SRC/" "$DS
 echo -e "\nDry run complete. Press Enter to start actual move..."
 read
 
-# Count directories and files before move
+# --- Count directories and files ---
 DIR_COUNT=$(find "$SRC" -type d | wc -l)
 FILE_COUNT=$(find "$SRC" -type f | wc -l)
 
-# Actual move with filtered output
+# --- Actual move ---
 rsync -aAX --remove-source-files --info=progress2,stats2 --partial "$SRC/" "$DST/" \
     | grep -E 'sent|Number of files transferred|^./'
 
-# Clean empty directories
+# --- Clean empty directories ---
 find "$SRC" -type d -empty -delete
 
-# Summary
+# --- Summary ---
 echo -e "\nMove complete!"
 echo "Summary:"
 echo "  Source: $SRC"
