@@ -1,28 +1,46 @@
 #!/bin/bash
 
-# Set how many directory levels to display in rsync output (e.g., 2)
+# Set how many directory levels to display in rsync output
 LEVELS=2
-
-# Build regex pattern for grep
 REGEX="^./([^/]+/){0,$((LEVELS-1))}[^/]+|sent|Number of files transferred"
 
 # Base source directory
 BASE_SRC="/mnt/tank/storage-share/Media"
 
-# Find directories up to 3 levels deep for selection
-echo "Available source directories (up to 3 levels deep) under $BASE_SRC:"
-mapfile -t DIRS < <(find "$BASE_SRC" -mindepth 1 -maxdepth 3 -type d)
+# Function to interactively drill down
+select_directory() {
+    local CURRENT_DIR="$1"
+    while true; do
+        mapfile -t DIRS < <(find "$CURRENT_DIR" -mindepth 1 -maxdepth 1 -type d)
+        if [ ${#DIRS[@]} -eq 0 ]; then
+            echo "No further subdirectories in $CURRENT_DIR"
+            break
+        fi
 
-# Present selection menu
-PS3="Select the source directory to move: "
-select SRC in "${DIRS[@]}"; do
-    if [ -n "$SRC" ]; then
-        echo "Selected source: $SRC"
-        break
-    else
-        echo "Invalid selection. Try again."
-    fi
-done
+        echo "Subdirectories in $CURRENT_DIR:"
+        select DIR in "${DIRS[@]}"; do
+            if [ -n "$DIR" ]; then
+                echo "Selected: $DIR"
+                read -p "Is this the directory you want to copy from? [y/N]: " CONFIRM
+                if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+                    echo "Directory confirmed: $DIR"
+                    echo "$DIR"
+                    return
+                else
+                    # Drill down further
+                    CURRENT_DIR="$DIR"
+                    break
+                fi
+            else
+                echo "Invalid selection. Try again."
+            fi
+        done
+    done
+    echo "$CURRENT_DIR"
+}
+
+# Start interactive selection
+SRC=$(select_directory "$BASE_SRC")
 
 # Auto-suggest destination folder based on source, lowercase
 SRC_BASENAME=$(basename "$SRC")
