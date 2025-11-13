@@ -12,6 +12,7 @@ list_dirs() {
     local i=1
     for SUB in "$DIR"/*/; do
         [ -d "$SUB" ] || continue
+        # Count files to skip empty dirs
         FILE_COUNT=$(find "$SUB" -maxdepth 1 -type f | wc -l)
         [ "$FILE_COUNT" -eq 0 ] && continue
         DIRS+=("${SUB%/}")
@@ -33,7 +34,7 @@ else
     exit 1
 fi
 
-# --- Automatically select second-level if only one non-empty subdirectory exists ---
+# --- Select second-level directory (auto if only one non-empty) ---
 list_dirs "$TOP_DIR"
 
 if [ "${#DIRS[@]}" -eq 0 ]; then
@@ -43,7 +44,6 @@ elif [ "${#DIRS[@]}" -eq 1 ]; then
     echo -e "\nOnly one non-empty subdirectory found under $TOP_DIR."
     echo "Automatically selecting: $SRC"
 else
-    # Prompt for subdirectory selection
     echo -e "\nAvailable subdirectories under $TOP_DIR:"
     for i in "${!DIRS[@]}"; do
         echo "$((i+1))) $(basename "${DIRS[$i]}")"
@@ -59,15 +59,6 @@ else
 fi
 
 echo -e "\nYou've selected: $SRC"
-
-# Show 1-level contents for preview (skip empty subfolders)
-echo "Contents of $SRC (1 level deep, non-empty only):"
-for SUB in "$SRC"/*/; do
-    [ -d "$SUB" ] || continue
-    FILE_COUNT=$(find "$SUB" -maxdepth 1 -type f | wc -l)
-    [ "$FILE_COUNT" -eq 0 ] && continue
-    echo "  $(basename "${SUB%/}") ($FILE_COUNT files)"
-done
 
 # Destination prompt with default suggestion
 REL_PATH="${SRC#$BASE_SRC/}"
