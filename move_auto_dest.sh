@@ -1,32 +1,26 @@
 #!/bin/bash
 
-# Base source directory
 BASE_SRC="/mnt/tank/storage-share/Media"
-REGEX="^./([^/]+/){0,1}[^/]+|sent|Number of files transferred"
 
-# --- Functions ---
-
-# List 1-level subdirectories with file counts
+# List directories 1 level deep, numbered
 list_dirs() {
     local DIR="$1"
     DIRS=()
     local i=1
     for SUB in "$DIR"/*/; do
         [ -d "$SUB" ] || continue
-        FILE_COUNT=$(find "$SUB" -maxdepth 1 -type f | wc -l)
-        DIRS+=("${SUB%/}")  # remove trailing slash
-        printf "%d) %s (%d files)\n" "$i" "$(basename "${SUB%/}")" "$FILE_COUNT"
+        DIRS+=("${SUB%/}")
+        echo "$i) $(basename "${SUB%/}")"
         i=$((i+1))
     done
 }
 
-# Interactive directory selection: one level at a time
+# Interactive selection
 select_directory() {
     local CURRENT="$1"
     while true; do
         echo -e "\nAvailable directories under $CURRENT:"
         list_dirs "$CURRENT"
-
         echo -n "Enter the number of the directory you want to move: "
         read CHOICE
 
@@ -39,17 +33,16 @@ select_directory() {
             for SUB in "$SELECTED"/*/; do
                 [ -d "$SUB" ] || continue
                 FILE_COUNT=$(find "$SUB" -maxdepth 1 -type f | wc -l)
-                printf "  %s (%d files)\n" "$(basename "${SUB%/}")" "$FILE_COUNT"
+                echo "  $(basename "${SUB%/}") ($FILE_COUNT files)"
             done
 
-            # Confirm selection
             echo -n "Is this the directory you want to copy from? [y/N]: "
             read CONFIRM
             if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
                 echo "$SELECTED"
                 return
             else
-                echo "Returning to parent level..."
+                echo "Returning to parent directory selection..."
             fi
         else
             echo "Invalid selection. Try again."
@@ -60,11 +53,9 @@ select_directory() {
 # --- Script Start ---
 echo "Welcome! This script will move directories under $BASE_SRC."
 
-# Select source directory
 SRC=$(select_directory "$BASE_SRC")
 echo -e "\nDirectory confirmed: $SRC"
 
-# Destination suggestion
 REL_PATH="${SRC#$BASE_SRC/}"
 DST_SUGGEST=$(echo "$REL_PATH" | tr '[:upper:]' '[:lower:]')
 echo -n "Enter destination folder name (default: $DST_SUGGEST, under /mnt/tank/media): "
@@ -72,28 +63,20 @@ read DST_SUB
 DST_SUB=${DST_SUB:-$DST_SUGGEST}
 DST="/mnt/tank/media/$DST_SUB"
 
-# Ensure destination exists
 mkdir -p "$DST"
 
-# Scan source summary
-echo -e "\nScanning source directory for summary..."
-TOTAL_DIRS=$(find "$SRC" -type d | wc -l)
-TOTAL_FILES=$(find "$SRC" -type f | wc -l)
-echo "Total directories: $TOTAL_DIRS"
-echo "Total files: $TOTAL_FILES"
+echo -e "\nSource: $SRC"
+echo "Destination: $DST"
 
-# Dry run
 echo -e "\nStarting dry run..."
-rsync -aAXn --remove-source-files --info=progress2,stats2 --partial "$SRC/" "$DST/" | grep -E "$REGEX"
+rsync -aAXn --remove-source-files --info=progress2,stats2 --partial "$SRC/" "$DST/"
 
-echo -e "\nDry run complete. Review output above."
-echo -n "Press Enter to start actual move…"
+echo -e "\nDry run complete. Press Enter to start actual move..."
 read
 
-# Actual move
-rsync -aAX --remove-source-files --info=progress2,stats2 --partial "$SRC/" "$DST/" | grep -E "$REGEX"
+rsync -aAX --remove-source-files --info=progress2,stats2 --partial "$SRC/" "$DST/"
 
-# Clean empty directories in source
+echo -e "\nCleaning empty directories..."
 find "$SRC" -type d -empty -delete
 
-echo -e "\nMove complete and empty directories cleaned!"
+echo -e "\nMove complete!"
