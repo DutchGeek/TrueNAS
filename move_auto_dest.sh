@@ -7,10 +7,11 @@ REGEX="^./([^/]+/){0,$((LEVELS-1))}[^/]+|sent|Number of files transferred"
 # Base source directory
 BASE_SRC="/mnt/tank/storage-share/Media"
 
-# Function to interactively drill down
+# Function to interactively drill down with next-level preview
 select_directory() {
     local CURRENT_DIR="$1"
     while true; do
+        # List current level subdirectories
         mapfile -t DIRS < <(find "$CURRENT_DIR" -mindepth 1 -maxdepth 1 -type d)
         if [ ${#DIRS[@]} -eq 0 ]; then
             echo "No further subdirectories in $CURRENT_DIR"
@@ -21,6 +22,19 @@ select_directory() {
         select DIR in "${DIRS[@]}"; do
             if [ -n "$DIR" ]; then
                 echo "Selected: $DIR"
+
+                # Preview next level subdirectories
+                NEXT_LEVEL=$(find "$DIR" -mindepth 1 -maxdepth 1 -type d)
+                if [ -n "$NEXT_LEVEL" ]; then
+                    echo "Contents of the next level under $DIR:"
+                    for d in $NEXT_LEVEL; do
+                        echo "  $(basename "$d")"
+                    done
+                else
+                    echo "No further subdirectories under $DIR"
+                fi
+
+                # Confirm with user
                 read -p "Is this the directory you want to copy from? [y/N]: " CONFIRM
                 if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
                     echo "Directory confirmed: $DIR"
