@@ -5,7 +5,7 @@ BASE_DST="/mnt/tank/media"
 
 echo "Welcome! This script will move directories under $BASE_SRC."
 
-# --- List top-level directories (show all) ---
+# --- List top-level directories ---
 mapfile -t TOP_DIRS < <(find "$BASE_SRC" -mindepth 1 -maxdepth 1 -type d | sort)
 if [ "${#TOP_DIRS[@]}" -eq 0 ]; then
     echo "No directories found under $BASE_SRC. Exiting."
@@ -31,8 +31,8 @@ else
     fi
 fi
 
-# --- List second-level directories (skip completely empty) ---
-mapfile -t SUB_DIRS < <(find "$TOP_DIR" -mindepth 1 -maxdepth 1 -type d -exec bash -c '[ "$(ls -A "{}")" ] && echo "{}"' \;)
+# --- List second-level directories (do not display contents) ---
+mapfile -t SUB_DIRS < <(find "$TOP_DIR" -mindepth 1 -maxdepth 1 -type d | sort)
 if [ "${#SUB_DIRS[@]}" -eq 0 ]; then
     SRC="$TOP_DIR"
 elif [ "${#SUB_DIRS[@]}" -eq 1 ]; then
@@ -55,7 +55,7 @@ fi
 
 echo -e "\nYou've selected: $SRC"
 
-# --- Destination prompt ---
+# --- Destination folder ---
 REL_PATH="${SRC#$BASE_SRC/}"
 DST_SUGGEST=$(echo "$REL_PATH" | tr '[:upper:]' '[:lower:]')
 echo -n "Enter destination folder name (default: $DST_SUGGEST, under $BASE_DST): "
@@ -67,7 +67,7 @@ mkdir -p "$DST"
 echo -e "\nSource: $SRC"
 echo "Destination: $DST"
 
-# --- Dry run ---
+# --- Dry run (filtered) ---
 echo -e "\nStarting dry run (filtered output)..."
 rsync -aAXn --remove-source-files --info=progress2,stats2 --partial "$SRC/" "$DST/" \
     | grep -E 'sent|Number of files transferred|^./'
