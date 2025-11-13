@@ -1,38 +1,20 @@
 #!/bin/bash
 
 # Settings
-LEVELS=2
-TREE_DEPTH=2
-REGEX="^./([^/]+/){0,$((LEVELS-1))}[^/]+|sent|Number of files transferred"
+REGEX="^./([^/]+/){0,1}[^/]+|sent|Number of files transferred"
 BASE_SRC="/mnt/tank/storage-share/Media"
 
-# Function: print tree with indentation, colors, highlight selected directory, and file counts
-print_tree() {
+# Function: print 1-level tree with file counts and colors
+print_tree_one_level() {
     local DIR="$1"
-    local DEPTH="$2"
-    local SELECTED="$3"
-    local INDENT=""
-    for ((i=1;i<DEPTH;i++)); do
-        INDENT="$INDENT  "
-    done
-
     mapfile -t SUBDIRS < <(find "$DIR" -mindepth 1 -maxdepth 1 -type d | sort)
     for SUB in "${SUBDIRS[@]}"; do
         FILE_COUNT=$(find "$SUB" -maxdepth 1 -type f | wc -l)
-        if [ "$SUB" == "$SELECTED" ]; then
-            # Highlight selected directory in green
-            echo -e "${INDENT}\033[1;32m$(basename "$SUB")\033[0m ($FILE_COUNT files)"
-        else
-            # Other directories in blue
-            echo -e "${INDENT}\033[1;34m$(basename "$SUB")\033[0m ($FILE_COUNT files)"
-        fi
-        if [ "$DEPTH" -lt "$TREE_DEPTH" ]; then
-            print_tree "$SUB" $((DEPTH+1)) "$SELECTED"
-        fi
+        echo -e "\033[1;34m$(basename "$SUB")\033[0m ($FILE_COUNT files)"
     done
 }
 
-# Function: interactive drill-down with tree preview showing file counts
+# Function: interactive selection with 1-level preview
 select_directory() {
     local CURRENT_DIR="$1"
     while true; do
@@ -43,22 +25,19 @@ select_directory() {
         fi
 
         COLUMNS=1
-        echo "Subdirectories in $CURRENT_DIR:"
+        echo "Which directory do you want to move?"
         select DIR in "${DIRS[@]}"; do
             if [ -n "$DIR" ]; then
-                # Show selection and its contents
                 echo -e "\nYou've selected: $DIR"
-                echo "I see the following contents (up to $TREE_DEPTH levels):"
-                print_tree "$DIR" 1 "$DIR"
+                echo "I see the following contents (1 level deep):"
+                print_tree_one_level "$DIR"
 
-                # Confirm with user
                 read -p "Is this the directory you want to copy from? [y/N]: " CONFIRM
                 if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
                     echo "Directory confirmed: $DIR"
                     echo "$DIR"
                     return
                 else
-                    # Drill down further
                     CURRENT_DIR="$DIR"
                     break
                 fi
