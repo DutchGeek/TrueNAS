@@ -28,6 +28,7 @@ select_directory() {
         echo "Which directory do you want to move?"
         select DIR in "${DIRS[@]}"; do
             if [ -n "$DIR" ]; then
+                # Show selection and its contents
                 echo -e "\nYou've selected: $DIR"
                 echo "I see the following contents (1 level deep):"
                 print_tree_one_level "$DIR"
@@ -52,8 +53,8 @@ select_directory() {
 # Start interactive selection
 SRC=$(select_directory "$BASE_SRC")
 
-# Destination suggestion mirrors full relative path, lowercase
-REL_PATH="${SRC#$BASE_SRC/}"
+# Compute destination suggestion based on full relative path from base
+REL_PATH="${SRC#$BASE_SRC/}"   # strip the base path
 DST_SUGGEST=$(echo "$REL_PATH" | tr '[:upper:]' '[:lower:]')
 read -p "Enter destination folder name (default: $DST_SUGGEST, under /mnt/tank/media): " DST_SUB
 DST_SUB=${DST_SUB:-$DST_SUGGEST}
