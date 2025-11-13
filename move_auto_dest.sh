@@ -6,7 +6,7 @@ TREE_DEPTH=2
 REGEX="^./([^/]+/){0,$((LEVELS-1))}[^/]+|sent|Number of files transferred"
 BASE_SRC="/mnt/tank/storage-share/Media"
 
-# Function: print tree with indentation, colors, and highlight selected directory
+# Function: print tree with indentation, colors, highlight selected directory, and file counts
 print_tree() {
     local DIR="$1"
     local DEPTH="$2"
@@ -18,12 +18,13 @@ print_tree() {
 
     mapfile -t SUBDIRS < <(find "$DIR" -mindepth 1 -maxdepth 1 -type d | sort)
     for SUB in "${SUBDIRS[@]}"; do
+        FILE_COUNT=$(find "$SUB" -maxdepth 1 -type f | wc -l)
         if [ "$SUB" == "$SELECTED" ]; then
             # Highlight selected directory in green
-            echo -e "${INDENT}\033[1;32m$(basename "$SUB")\033[0m"
+            echo -e "${INDENT}\033[1;32m$(basename "$SUB")\033[0m ($FILE_COUNT files)"
         else
             # Other directories in blue
-            echo -e "${INDENT}\033[1;34m$(basename "$SUB")\033[0m"
+            echo -e "${INDENT}\033[1;34m$(basename "$SUB")\033[0m ($FILE_COUNT files)"
         fi
         if [ "$DEPTH" -lt "$TREE_DEPTH" ]; then
             print_tree "$SUB" $((DEPTH+1)) "$SELECTED"
@@ -31,7 +32,7 @@ print_tree() {
     done
 }
 
-# Function: interactive drill-down with tree preview
+# Function: interactive drill-down with tree preview showing file counts
 select_directory() {
     local CURRENT_DIR="$1"
     while true; do
@@ -45,9 +46,9 @@ select_directory() {
         echo "Subdirectories in $CURRENT_DIR:"
         select DIR in "${DIRS[@]}"; do
             if [ -n "$DIR" ]; then
-                echo "Selected: $DIR"
-
-                echo "Contents of $DIR (up to $TREE_DEPTH levels):"
+                # Show selection and its contents
+                echo -e "\nYou've selected: $DIR"
+                echo "I see the following contents (up to $TREE_DEPTH levels):"
                 print_tree "$DIR" 1 "$DIR"
 
                 # Confirm with user
