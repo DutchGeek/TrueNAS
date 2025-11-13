@@ -5,72 +5,48 @@ BASE_DST="/mnt/tank/media"
 
 echo "Welcome! This script will move directories under $BASE_SRC."
 
-# --- List top-level directories (show all, even if empty) ---
-list_dirs_top() {
-    local DIR="$1"
-    DIRS=()
-    local i=1
-    for SUB in "$DIR"/*/; do
-        [ -d "$SUB" ] || continue
-        DIRS+=("${SUB%/}")
-        echo "$i) $(basename "${SUB%/}")"
-        i=$((i+1))
-    done
-}
-
-# --- List subdirectories (skip completely empty ones) ---
-list_dirs() {
-    local DIR="$1"
-    DIRS=()
-    local i=1
-    for SUB in "$DIR"/*/; do
-        [ -d "$SUB" ] || continue
-        # Skip if directory has neither files nor subdirectories
-        CONTENT_COUNT=$(find "$SUB" -mindepth 1 -maxdepth 1 | wc -l)
-        [ "$CONTENT_COUNT" -eq 0 ] && continue
-        DIRS+=("${SUB%/}")
-        echo "$i) $(basename "${SUB%/}")"
-        i=$((i+1))
-    done
-}
-
-# --- Select top-level directory ---
-echo -e "\nAvailable top-level directories:"
-list_dirs_top "$BASE_SRC"
-
-if [ "${#DIRS[@]}" -eq 0 ]; then
-    echo "No top-level directories found. Exiting."
+# --- List top-level directories (show all) ---
+mapfile -t TOP_DIRS < <(find "$BASE_SRC" -mindepth 1 -maxdepth 1 -type d | sort)
+if [ "${#TOP_DIRS[@]}" -eq 0 ]; then
+    echo "No directories found under $BASE_SRC. Exiting."
     exit 1
-elif [ "${#DIRS[@]}" -eq 1 ]; then
-    TOP_DIR="${DIRS[0]}"
+fi
+
+echo -e "\nAvailable top-level directories:"
+for i in "${!TOP_DIRS[@]}"; do
+    echo "$((i+1))) $(basename "${TOP_DIRS[$i]}")"
+done
+
+if [ "${#TOP_DIRS[@]}" -eq 1 ]; then
+    TOP_DIR="${TOP_DIRS[0]}"
     echo "Only one top-level directory found. Automatically selecting: $(basename "$TOP_DIR")"
 else
     echo -n "Enter the number of the top-level directory: "
     read NUM1
-    if [[ "$NUM1" =~ ^[0-9]+$ ]] && [ "$NUM1" -ge 1 ] && [ "$NUM1" -le "${#DIRS[@]}" ]; then
-        TOP_DIR="${DIRS[$((NUM1-1))]}"
+    if [[ "$NUM1" =~ ^[0-9]+$ ]] && [ "$NUM1" -ge 1 ] && [ "$NUM1" -le "${#TOP_DIRS[@]}" ]; then
+        TOP_DIR="${TOP_DIRS[$((NUM1-1))]}"
     else
         echo "Invalid selection!"
         exit 1
     fi
 fi
 
-# --- Second-level selection ---
-list_dirs "$TOP_DIR"
-if [ "${#DIRS[@]}" -eq 0 ]; then
+# --- List second-level directories (skip completely empty) ---
+mapfile -t SUB_DIRS < <(find "$TOP_DIR" -mindepth 1 -maxdepth 1 -type d -exec bash -c '[ "$(ls -A "{}")" ] && echo "{}"' \;)
+if [ "${#SUB_DIRS[@]}" -eq 0 ]; then
     SRC="$TOP_DIR"
-elif [ "${#DIRS[@]}" -eq 1 ]; then
-    SRC="${DIRS[0]}"
+elif [ "${#SUB_DIRS[@]}" -eq 1 ]; then
+    SRC="${SUB_DIRS[0]}"
     echo "Only one subdirectory found under $(basename "$TOP_DIR"). Automatically selecting: $(basename "$SRC")"
 else
     echo -e "\nAvailable subdirectories under $(basename "$TOP_DIR"):"
-    for i in "${!DIRS[@]}"; do
-        echo "$((i+1))) $(basename "${DIRS[$i]}")"
+    for i in "${!SUB_DIRS[@]}"; do
+        echo "$((i+1))) $(basename "${SUB_DIRS[$i]}")"
     done
     echo -n "Enter the number of the subdirectory: "
     read NUM2
-    if [[ "$NUM2" =~ ^[0-9]+$ ]] && [ "$NUM2" -ge 1 ] && [ "$NUM2" -le "${#DIRS[@]}" ]; then
-        SRC="${DIRS[$((NUM2-1))]}"
+    if [[ "$NUM2" =~ ^[0-9]+$ ]] && [ "$NUM2" -ge 1 ] && [ "$NUM2" -le "${#SUB_DIRS[@]}" ]; then
+        SRC="${SUB_DIRS[$((NUM2-1))]}"
     else
         echo "Invalid selection!"
         exit 1
