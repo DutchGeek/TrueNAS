@@ -10,7 +10,7 @@ print_tree_one_level() {
     mapfile -t SUBDIRS < <(find "$DIR" -mindepth 1 -maxdepth 1 -type d | sort)
     for SUB in "${SUBDIRS[@]}"; do
         FILE_COUNT=$(find "$SUB" -maxdepth 1 -type f | wc -l)
-        echo -e "  \033[1;34m$(basename "$SUB")\033[0m ($FILE_COUNT files)"
+        printf "  \033[1;34m%s\033[0m (%d files)\n" "$(basename "$SUB")" "$FILE_COUNT"
     done
 }
 
@@ -21,17 +21,17 @@ select_directory() {
         mapfile -t DIRS < <(find "$CURRENT_DIR" -mindepth 1 -maxdepth 1 -type d | sort)
         if [ ${#DIRS[@]} -eq 0 ]; then
             echo "No further subdirectories in $CURRENT_DIR"
-            return "$CURRENT_DIR"
+            echo "$CURRENT_DIR"
+            return
         fi
 
         echo -e "\nAvailable directories under $CURRENT_DIR:"
         for i in "${!DIRS[@]}"; do
             DIR="${DIRS[$i]}"
             FILE_COUNT=$(find "$DIR" -maxdepth 1 -type f | wc -l)
-            echo -e "$((i+1))) \033[1;34m$(basename "$DIR")\033[0m ($FILE_COUNT files)"
+            printf "%d) \033[1;34m%s\033[0m (%d files)\n" "$((i+1))" "$(basename "$DIR")" "$FILE_COUNT"
         done
 
-        COLUMNS=1
         echo
         read -p "Enter the number of the directory you want to move: " CHOICE
 
@@ -55,7 +55,10 @@ select_directory() {
     done
 }
 
-# Start interactive selection
+# --- Start Script ---
+echo "Welcome! This script will move directories under $BASE_SRC."
+echo "You will be prompted to select which directory to move."
+
 SRC=$(select_directory "$BASE_SRC")
 
 # Compute destination suggestion based on relative path from base
