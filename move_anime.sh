@@ -1,38 +1,34 @@
 #!/bin/bash
+#
+# move_anime.sh — Moves Anime series directories from the main Media share to the target media directory
+# Designed for TrueNAS Command Tasks (non-interactive)
+#
 
-# Base paths
-BASE_SRC="/mnt/tank/storage-share/Media/Anime/Series"
-BASE_DST="/mnt/tank/media/anime/series"
+SRC_BASE="/mnt/tank/storage-share/Media/Anime/Series"
+DST_BASE="/mnt/tank/media/anime/series"
+LOGFILE="/var/log/move_anime.log"
 
-echo "Welcome! This script will move everything under $BASE_SRC to $BASE_DST."
+echo "========== $(date) ==========" >> "$LOGFILE"
+echo "Starting move task..." >> "$LOGFILE"
+echo "Source: $SRC_BASE" >> "$LOGFILE"
+echo "Destination: $DST_BASE" >> "$LOGFILE"
 
-# Create destination folder if it doesn't exist
-mkdir -p "$BASE_DST"
+# Check if source exists
+if [ ! -d "$SRC_BASE" ]; then
+  echo "Source directory not found: $SRC_BASE" >> "$LOGFILE"
+  exit 1
+fi
 
-# Count directories and files before move
-DIR_COUNT=$(find "$BASE_SRC" -type d | wc -l)
-FILE_COUNT=$(find "$BASE_SRC" -type f | wc -l)
+# Ensure destination exists
+mkdir -p "$DST_BASE"
 
-# Show what will be moved
-echo -e "\nSource: $BASE_SRC"
-echo "Destination: $BASE_DST"
-echo "Directories to move: $DIR_COUNT"
-echo "Files to move: $FILE_COUNT"
+# Perform rsync move
+rsync -av --remove-source-files --ignore-existing "$SRC_BASE"/ "$DST_BASE"/ >> "$LOGFILE" 2>&1
 
-# Confirm before moving
-read -p "Press Enter to start moving..."
+# Remove empty directories left behind
+find "$SRC_BASE" -type d -empty -delete >> "$LOGFILE" 2>&1
 
-# Move everything under Series
-rsync -aAX --remove-source-files --info=progress2,stats2 --partial "$BASE_SRC/" "$BASE_DST/" \
-    | grep -E 'sent|Number of files transferred|^./'
+echo "Move completed successfully." >> "$LOGFILE"
+echo "" >> "$LOGFILE"
 
-# Remove empty directories in source
-find "$BASE_SRC" -type d -empty -delete
-
-# Final summary
-echo -e "\nMove complete!"
-echo "Summary:"
-echo "  Source: $BASE_SRC"
-echo "  Destination: $BASE_DST"
-echo "  Directories moved: $DIR_COUNT"
-echo "  Files moved: $FILE_COUNT"
+exit 0
