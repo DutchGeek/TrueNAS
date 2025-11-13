@@ -7,11 +7,11 @@ LEVELS=2
 REGEX="^./([^/]+/){0,$((LEVELS-1))}[^/]+|sent|Number of files transferred"
 
 # Base source directory
-BASE_SRC="/mnt/tank/storage-share"
+BASE_SRC="/mnt/tank/media"
 
-# Find directories up to 2 levels deep for selection
-echo "Available source directories (up to 2 levels deep) under $BASE_SRC:"
-mapfile -t DIRS < <(find "$BASE_SRC" -mindepth 1 -maxdepth 2 -type d)
+# Find directories up to 3 levels deep for selection
+echo "Available source directories (up to 3 levels deep) under $BASE_SRC:"
+mapfile -t DIRS < <(find "$BASE_SRC" -mindepth 1 -maxdepth 3 -type d)
 
 # Present selection menu
 PS3="Select the source directory to move: "
