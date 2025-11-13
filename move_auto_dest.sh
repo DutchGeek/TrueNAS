@@ -4,38 +4,34 @@
 BASE_SRC="/mnt/tank/storage-share/Media"
 REGEX="^./([^/]+/){0,1}[^/]+|sent|Number of files transferred"
 
-# Function: list 1-level subdirectories with file counts
-list_dirs() {
+# Function to list subdirectories 1-level deep
+get_subdirs() {
     local DIR="$1"
-    DIRS=()
-    local i=1
-    for SUB in "$DIR"/*/; do
-        [ -d "$SUB" ] || continue
-        FILE_COUNT=$(find "$SUB" -maxdepth 1 -type f | wc -l)
-        DIRS+=("$SUB")
-        printf "%d) %s (%d files)\n" "$i" "$(basename "$SUB")" "$FILE_COUNT"
-        i=$((i+1))
+    local SUBS=()
+    for d in "$DIR"/*/; do
+        [ -d "$d" ] && SUBS+=("$d")
     done
+    echo "${SUBS[@]}"
 }
 
-# Function: interactive selection
+# Function: interactive directory selection using 'select'
 select_directory() {
     local CURRENT="$1"
     while true; do
+        SUBS=($(get_subdirs "$CURRENT"))
+        if [ ${#SUBS[@]} -eq 0 ]; then
+            echo "No subdirectories under $CURRENT"
+            echo "$CURRENT"
+            return
+        fi
+
         echo -e "\nAvailable directories under $CURRENT:"
-        list_dirs "$CURRENT"
-        # Flush output
-        sleep 0.1
-
-        echo -n "Enter the number of the directory you want to move: "
-        read CHOICE
-
-        if [[ "$CHOICE" =~ ^[0-9]+$ ]] && [ "$CHOICE" -ge 1 ] && [ "$CHOICE" -le "${#DIRS[@]}" ]; then
-            SELECTED="${DIRS[$((CHOICE-1))]}"
-            echo -e "\nYou've selected: $SELECTED"
-            # Show 1-level contents of the selected directory
+        select DIR in "${SUBS[@]}"; do
+            [ -n "$DIR" ] || { echo "Invalid selection. Try again."; continue; }
+            echo -e "\nYou've selected: $DIR"
+            # Show 1-level contents
             echo "Contents of this directory (1 level deep):"
-            for SUB in "$SELECTED"/*/; do
+            for SUB in "$DIR"/*/; do
                 [ -d "$SUB" ] || continue
                 FILE_COUNT=$(find "$SUB" -maxdepth 1 -type f | wc -l)
                 printf "  %s (%d files)\n" "$(basename "$SUB")" "$FILE_COUNT"
@@ -43,25 +39,24 @@ select_directory() {
             echo -n "Is this the directory you want to copy from? [y/N]: "
             read CONFIRM
             if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
-                echo "$SELECTED"
+                echo "$DIR"
                 return
             else
-                CURRENT="$SELECTED"
+                CURRENT="$DIR"
+                break
             fi
-        else
-            echo "Invalid selection. Try again."
-        fi
+        done
     done
 }
 
 # --- Start Script ---
 echo "Welcome! This script will move directories under $BASE_SRC."
 
-# Interactive directory selection
+# Select source directory
 SRC=$(select_directory "$BASE_SRC")
 echo -e "\nDirectory confirmed: $SRC"
 
-# Compute destination suggestion from full relative path
+# Compute destination suggestion
 REL_PATH="${SRC#$BASE_SRC/}"
 DST_SUGGEST=$(echo "$REL_PATH" | tr '[:upper:]' '[:lower:]')
 echo -n "Enter destination folder name (default: $DST_SUGGEST, under /mnt/tank/media): "
@@ -90,7 +85,7 @@ read
 # Actual move
 rsync -aAX --remove-source-files --info=progress2,stats2 --partial "$SRC/" "$DST/" | grep -E "$REGEX"
 
-# Clean empty directories
+# Clean empty directories in source
 find "$SRC" -type d -empty -delete
 
 echo -e "\nMove complete and empty directories cleaned!"
